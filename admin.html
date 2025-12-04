@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geocon AI Usage Monitor - Admin</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="logo-container">
+                <img src="logo.png" alt="Geocon Logo" class="logo">
+                <h1>AI Usage Monitor - Admin</h1>
+            </div>
+            <nav>
+                <a href="index.html" class="nav-link">← Back to Submit</a>
+            </nav>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <h2>Admin Dashboard</h2>
+            <p class="subtitle">View all stored prompts and submissions</p>
+            
+            <div class="admin-controls">
+                <button id="refresh-btn" class="btn btn-secondary">Refresh Data</button>
+                <button id="export-btn" class="btn btn-secondary">Export JSON</button>
+                <button id="clear-btn" class="btn btn-danger">Clear All Data</button>
+                <div class="stats-summary">
+                    <span>Total: <strong id="total-count">0</strong></span>
+                    <span>Flagged: <strong id="flagged-count">0</strong></span>
+                </div>
+            </div>
+
+            <div id="loading" class="loading hidden">
+                <div class="loader"></div>
+                <p>Loading submissions...</p>
+            </div>
+
+            <div id="submissions-container" class="submissions-container">
+                <!-- Submissions will be loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <script src="admin.js"></script>
+</body>
+</html>
+

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geocon AI Usage Monitor</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="logo-container">
+                <img src="logo.png" alt="Geocon Logo" class="logo">
+                <h1>AI Tool</h1>
+            </div>
+            <nav>
+                <a href="admin.html" class="nav-link">Admin Dashboard</a>
+            </nav>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <h2>Enter Your Prompt</h2>
+            <p class="subtitle">Submit your prompt to Copilot</p>
+            
+            <form id="prompt-form">
+                <div class="form-group">
+                    <label for="employee-name">Your Name</label>
+                    <input type="text" id="employee-name" placeholder="Enter your name" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="prompt-input">Your Prompt</label>
+                    <textarea id="prompt-input" rows="8" placeholder="Enter your question or prompt for Copilot..." required></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label for="file-upload">Upload Files (Optional)</label>
+                    <input type="file" id="file-upload" multiple accept=".txt,.pdf,.doc,.docx,.csv,.md,.json,.py,.js,.html,.css,.xlsx,.xls,.pptx,.ppt">
+                    <div id="file-list" class="file-list"></div>
+                    <small class="file-hint">Supported: Text, PDF, Word, Excel, PowerPoint, Code files</small>
+                </div>
+                
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="search-sharepoint" class="checkbox-input">
+                        <span class="checkbox-text">🔍 Search Geocon SharePoint for relevant information</span>
+                    </label>
+                </div>
+                
+                <div class="button-group">
+                    <button type="submit" class="btn btn-primary" id="submit-btn">
+                        <span id="submit-text">Submit to Copilot</span>
+                        <span id="submit-loader" class="loader hidden"></span>
+                    </button>
+                </div>
+            </form>
+
+            <!-- ChatGPT Response -->
+            <div id="response-section" class="response-section hidden">
+                <h3>Copilot Response</h3>
+                <div id="chatgpt-response" class="chatgpt-response"></div>
+            </div>
+
+            <!-- Status Message -->
+            <div id="status-message" class="status-message hidden"></div>
+            
+            <!-- Debug Info (shown on error) -->
+            <div id="debug-info" class="debug-info hidden">
+                <h4>Debug Information</h4>
+                <div id="debug-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

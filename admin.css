@@ -1,0 +1,252 @@
+/* Admin specific styles */
+
+header nav {
+    display: flex;
+    gap: 10px;
+}
+
+.nav-link {
+    padding: 10px 20px;
+    background: var(--primary-color);
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+.nav-link:hover {
+    background: var(--primary-dark);
+}
+
+.admin-controls {
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    margin-bottom: 30px;
+    flex-wrap: wrap;
+}
+
+.btn-secondary {
+    background: var(--accent-color);
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: var(--primary-light);
+}
+
+.btn-danger {
+    background: var(--danger-color);
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #c82333;
+}
+
+.stats-summary {
+    margin-left: auto;
+    display: flex;
+    gap: 20px;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.stats-summary strong {
+    color: var(--primary-color);
+    font-size: 16px;
+}
+
+.loading {
+    text-align: center;
+    padding: 40px;
+}
+
+.loading .loader {
+    margin: 0 auto 20px;
+    width: 40px;
+    height: 40px;
+    border: 4px solid var(--border-color);
+    border-top-color: var(--primary-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.submissions-container {
+    margin-top: 20px;
+}
+
+.submissions-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.submission-card-admin {
+    background: var(--card-bg);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    padding: 25px;
+    box-shadow: var(--shadow);
+    transition: all 0.3s ease;
+}
+
+.submission-card-admin:hover {
+    box-shadow: var(--shadow-lg);
+    transform: translateY(-2px);
+}
+
+.submission-header-admin {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 2px solid var(--border-color);
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.submission-id {
+    font-size: 14px;
+    color: var(--text-secondary);
+    font-family: 'Courier New', monospace;
+}
+
+.submission-id strong {
+    color: var(--primary-color);
+    font-size: 16px;
+}
+
+.submission-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    flex: 1;
+}
+
+.submission-employee {
+    font-weight: 600;
+    color: var(--primary-color);
+    font-size: 16px;
+}
+
+.submission-date {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.submission-status {
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.submission-status.safe {
+    background: #d4edda;
+    color: #155724;
+}
+
+.submission-status.warning {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.submission-status.danger {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.submission-content {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.content-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.content-section h4 {
+    color: var(--primary-color);
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.content-box {
+    background: var(--bg-color);
+    padding: 15px;
+    border-radius: 8px;
+    border-left: 4px solid var(--primary-color);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-size: 14px;
+    line-height: 1.6;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.prompt-box {
+    border-left-color: var(--accent-color);
+}
+
+.response-box {
+    border-left-color: var(--primary-color);
+}
+
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-secondary);
+    font-size: 16px;
+}
+
+.error-message {
+    background: #f8d7da;
+    color: #721c24;
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid #f5c6cb;
+}
+
+.error-message h3 {
+    margin-top: 0;
+}
+
+.error-message code {
+    background: white;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .admin-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .stats-summary {
+        margin-left: 0;
+        justify-content: space-between;
+    }
+    
+    .submission-header-admin {
+        flex-direction: column;
+    }
+    
+    .content-box {
+        max-height: 200px;
+    }
+}
+

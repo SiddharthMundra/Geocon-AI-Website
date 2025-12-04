@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Data files
+submissions.json
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# API Keys and Secrets (DO NOT COMMIT)
+# Make sure app.py uses environment variables, not hardcoded keys
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
