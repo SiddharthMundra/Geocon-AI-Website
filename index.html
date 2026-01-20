@@ -3,75 +3,166 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Geocon AI Usage Monitor</title>
+    <title>Geocon AI - Copilot</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="container">
-        <!-- Header -->
-        <header>
-            <div class="logo-container">
-                <img src="logo.png" alt="Geocon Logo" class="logo">
-                <h1>AI Tool</h1>
+    <!-- Login Modal -->
+    <div id="login-modal" class="login-modal">
+        <div class="login-container">
+            <div class="login-header">
+                <img src="logo.png" alt="Geocon Logo" class="login-logo">
+                <h2>Geocon AI Copilot</h2>
+                <p>Sign in to continue</p>
             </div>
-            <nav>
-                <a href="admin.html" class="nav-link">Admin Dashboard</a>
-            </nav>
-        </header>
+            <form id="login-form" class="login-form">
+                <div class="form-group">
+                    <label for="login-email">Email Address</label>
+                    <input 
+                        type="email" 
+                        id="login-email" 
+                        placeholder="yourname@geoconinc.com" 
+                        required
+                        autocomplete="email"
+                    >
+                    <small class="form-hint">Must be a @geoconinc.com email address</small>
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Password</label>
+                    <input 
+                        type="password" 
+                        id="login-password" 
+                        placeholder="Enter password" 
+                        required
+                        autocomplete="current-password"
+                    >
+                </div>
+                <div id="login-error" class="login-error hidden"></div>
+                <button type="submit" class="btn-login">Sign In</button>
+            </form>
+        </div>
+    </div>
 
-        <!-- Main Content -->
-        <div class="main-content">
-            <h2>Enter your Prompt</h2>
-            <p class="subtitle">Submit your prompt to Copilot</p>
+    <!-- Name Setup Modal (shown on first login) -->
+    <div id="name-modal" class="login-modal hidden">
+        <div class="login-container">
+            <div class="login-header">
+                <h2>Welcome to Geocon AI!</h2>
+                <p>Please set your display name</p>
+            </div>
+            <form id="name-form" class="login-form">
+                <div class="form-group">
+                    <label for="setup-name">Your Name</label>
+                    <input 
+                        type="text" 
+                        id="setup-name" 
+                        placeholder="Enter your full name" 
+                        required
+                        autocomplete="name"
+                    >
+                </div>
+                <div id="name-error" class="login-error hidden"></div>
+                <button type="submit" class="btn-login">Continue</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="app-container hidden">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <button class="new-chat-btn" id="new-chat-btn">
+                    <span>+</span> New Chat
+                </button>
+            </div>
             
-            <form id="prompt-form">
-                <div class="form-group">
-                    <label for="employee-name">Your Name</label>
-                    <input type="text" id="employee-name" placeholder="Enter your name" required>
+            <div class="sidebar-content">
+                <div class="chat-history" id="chat-history">
+                    <!-- Chat history items will be inserted here -->
                 </div>
-                
-                <div class="form-group">
-                    <label for="prompt-input">Your Prompt</label>
-                    <textarea id="prompt-input" rows="8" placeholder="Enter your question or prompt for Copilot..." required></textarea>
+            </div>
+            
+            <div class="sidebar-footer">
+                <div class="user-info">
+                    <div class="user-email" id="user-email-display"></div>
                 </div>
-                
-                <div class="form-group">
-                    <label for="file-upload">Upload Files (Optional)</label>
-                    <input type="file" id="file-upload" multiple accept=".txt,.pdf,.doc,.docx,.csv,.md,.json,.py,.js,.html,.css,.xlsx,.xls,.pptx,.ppt">
-                    <div id="file-list" class="file-list"></div>
-                    <small class="file-hint">Supported: Text, PDF, Word, Excel, PowerPoint, Code files</small>
+                <nav>
+                    <a href="admin.html" id="admin-dashboard-link" class="nav-link hidden">Admin Dashboard</a>
+                </nav>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="chat-main">
+            <!-- Header -->
+            <header class="chat-header">
+                <div class="logo-container">
+                    <img src="logo.png" alt="Geocon Logo" class="logo">
+                    <div class="header-text">
+                        <h1>Geocon AI Copilot</h1>
+                        <div id="greeting" class="greeting"></div>
+                    </div>
                 </div>
-                
-                <div class="form-group">
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="search-sharepoint" class="checkbox-input">
-                        <span class="checkbox-text">🔍 Search Geocon SharePoint for relevant information</span>
-                    </label>
-                </div>
-                
-                <div class="button-group">
-                    <button type="submit" class="btn btn-primary" id="submit-btn">
-                        <span id="submit-text">Submit to Copilot</span>
-                        <span id="submit-loader" class="loader hidden"></span>
+                <div class="header-actions">
+                    <button id="settings-btn" class="header-btn" title="Settings">
+                        Settings
+                    </button>
+                    <button id="header-logout-btn" class="header-btn logout-header-btn" title="Logout">
+                        Logout
                     </button>
                 </div>
-            </form>
+            </header>
 
-            <!-- ChatGPT Response -->
-            <div id="response-section" class="response-section hidden">
-                <h3>Copilot Response</h3>
-                <div id="chatgpt-response" class="chatgpt-response"></div>
+            <!-- Chat Messages Container -->
+            <div class="chat-messages" id="chat-messages">
+                <div class="welcome-message">
+                    <h2>Welcome to Geocon AI Copilot</h2>
+                    <p>Start a new conversation or continue an existing one from the sidebar.</p>
+                </div>
             </div>
 
-            <!-- Status Message -->
-            <div id="status-message" class="status-message hidden"></div>
-            
-            <!-- Debug Info (shown on error) -->
-            <div id="debug-info" class="debug-info hidden">
-                <h4>Debug Information</h4>
-                <div id="debug-content"></div>
+            <!-- Input Area -->
+            <div class="chat-input-container">
+                <form id="chat-form" class="chat-form">
+                    <!-- Chat Input -->
+                    <div id="chat-input-wrapper" class="chat-input-wrapper">
+                        <!-- File List (shown above input when files are selected) -->
+                        <div id="file-list" class="file-list-inline"></div>
+                        
+                        <!-- Input Row -->
+                        <div class="chat-input-row">
+                            <!-- File Upload Button -->
+                            <button type="button" class="file-upload-btn" id="file-upload-btn" title="Upload Files">
+                                Attach
+                            </button>
+                            <input type="file" id="file-upload" multiple accept=".txt,.pdf,.doc,.docx,.csv,.md,.json,.py,.js,.html,.css,.xlsx,.xls,.pptx,.ppt" style="display: none;">
+                            
+                            <!-- Text Input -->
+                            <textarea 
+                                id="prompt-input" 
+                                class="chat-input" 
+                                placeholder="Type your message... (Shift+Enter for new line, Enter to send)"
+                                rows="1"
+                            ></textarea>
+                            
+                            <!-- Send Button -->
+                            <button type="submit" class="send-btn" id="send-btn" title="Send (Enter)">
+                                <span id="send-icon">Send</span>
+                                <span id="send-loader" class="loader hidden"></span>
+                            </button>
+                        </div>
+                        
+                        <!-- Options (below input) -->
+                        <div class="input-options">
+                            <label class="checkbox-label-inline">
+                                <input type="checkbox" id="search-sharepoint" class="checkbox-input">
+                                <span class="checkbox-text">Search SharePoint</span>
+                            </label>
+                        </div>
+                    </div>
+                </form>
             </div>
-        </div>
+        </main>
     </div>
 
     <script src="script.js"></script>

@@ -8,30 +8,80 @@
     <link rel="stylesheet" href="admin.css">
 </head>
 <body>
-    <div class="container">
+    <div class="admin-container">
         <!-- Header -->
-        <header>
+        <header class="admin-header">
             <div class="logo-container">
                 <img src="logo.png" alt="Geocon Logo" class="logo">
-                <h1>AI Usage Monitor - Admin</h1>
+                <div class="header-text">
+                    <h1>Admin Dashboard</h1>
+                    <p class="header-subtitle">Monitor all AI usage and submissions</p>
+                </div>
             </div>
             <nav>
-                <a href="index.html" class="nav-link">← Back to Submit</a>
+                <a href="index.html" class="nav-link">← Back to Chat</a>
             </nav>
         </header>
 
         <!-- Main Content -->
-        <div class="main-content">
-            <h2>Admin Dashboard</h2>
-            <p class="subtitle">View all stored prompts and submissions</p>
-            
+        <div class="admin-main">
+            <!-- Stats Cards -->
+            <div class="stats-cards">
+                <div class="stat-card">
+                    <div class="stat-content">
+                        <div class="stat-value" id="total-count">0</div>
+                        <div class="stat-label">Total Submissions</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-content">
+                        <div class="stat-value" id="employee-count">0</div>
+                        <div class="stat-label">Active Employees</div>
+                    </div>
+                </div>
+                <div class="stat-card warning">
+                    <div class="stat-content">
+                        <div class="stat-value" id="flagged-count">0</div>
+                        <div class="stat-label">Flagged Items</div>
+                    </div>
+                </div>
+                <div class="stat-card danger">
+                    <div class="stat-content">
+                        <div class="stat-value" id="danger-count">0</div>
+                        <div class="stat-label">Unsafe Items</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Filters and Controls -->
             <div class="admin-controls">
-                <button id="refresh-btn" class="btn btn-secondary">Refresh Data</button>
-                <button id="export-btn" class="btn btn-secondary">Export JSON</button>
-                <button id="clear-btn" class="btn btn-danger">Clear All Data</button>
-                <div class="stats-summary">
-                    <span>Total: <strong id="total-count">0</strong></span>
-                    <span>Flagged: <strong id="flagged-count">0</strong></span>
+                <div class="filter-section">
+                    <label for="employee-filter" class="filter-label">Filter by Employee:</label>
+                    <select id="employee-filter" class="filter-select">
+                        <option value="all">All Employees</option>
+                    </select>
+                </div>
+                
+                <div class="filter-section">
+                    <label for="status-filter" class="filter-label">Filter by Status:</label>
+                    <select id="status-filter" class="filter-select">
+                        <option value="all">All Status</option>
+                        <option value="safe">Safe</option>
+                        <option value="warning">Warning</option>
+                        <option value="danger">Unsafe</option>
+                    </select>
+                </div>
+
+                <div class="action-buttons">
+                    <button id="refresh-btn" class="btn btn-secondary">
+                        Refresh
+                    </button>
+                    <button id="export-btn" class="btn btn-secondary">
+                        Export JSON
+                    </button>
+                    <button id="clear-btn" class="btn btn-danger">
+                        Clear All
+                    </button>
                 </div>
             </div>
 
@@ -49,4 +99,3 @@
     <script src="admin.js"></script>
 </body>
 </html>
-

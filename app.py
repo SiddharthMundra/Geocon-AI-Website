@@ -9,9 +9,36 @@ import requests
 from urllib.parse import quote
 import base64
 import io
+from database import db, init_db, User, Conversation, Message, Submission, get_or_create_user, update_user_last_login
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)  # Enable CORS for frontend requests
+
+# Database configuration
+# Use DATABASE_URL from environment, or use the provided Render database URL
+DATABASE_URL = os.getenv('DATABASE_URL')
+if not DATABASE_URL:
+    # Default to the Render PostgreSQL database URL
+    DATABASE_URL = "postgresql://test_aiwebsite_sql_user:x7FrVTKtQCs1C8kdOdWsAadnpChkX1bP@dpg-d5nccmje5dus73f2rcs0-a.oregon-postgres.render.com/test_aiwebsite_sql"
+
+# Render PostgreSQL URLs sometimes need sslmode
+if DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,  # Verify connections before using
+    'pool_recycle': 300,    # Recycle connections after 5 minutes
+}
+
+# Initialize database
+try:
+    init_db(app)
+    print(f"[OK] Database initialized: {app.config['SQLALCHEMY_DATABASE_URI'][:50]}...")
+except Exception as e:
+    print(f"WARNING: Database initialization failed: {e}")
+    print("The app will continue but database features may not work.")
 
 # Azure OpenAI Configuration
 AZURE_OPENAI_ENDPOINT = os.getenv('AZURE_OPENAI_ENDPOINT', 'https://openai-aiwebsite.cognitiveservices.azure.com/')
@@ -26,7 +53,7 @@ SHAREPOINT_TENANT = os.getenv('SHAREPOINT_TENANT', '')  # e.g., 'geoconmail.onmi
 SHAREPOINT_CLIENT_ID = os.getenv('SHAREPOINT_CLIENT_ID', '')  # Azure AD App Client ID
 SHAREPOINT_CLIENT_SECRET = os.getenv('SHAREPOINT_CLIENT_SECRET', '')  # Azure AD App Client Secret
 SHAREPOINT_USE_GRAPH_API = os.getenv('SHAREPOINT_USE_GRAPH_API', 'true').lower() == 'true'
-# ⚠️ IMPORTANT: All operations are READ-ONLY - no modifications, deletions, or writes to SharePoint
+# IMPORTANT: All operations are READ-ONLY - no modifications, deletions, or writes to SharePoint
 # Only uses: GET requests, Sites.Read.All, Files.Read.All, Sites.Search.All permissions
 
 DATA_FILE = 'submissions.json'
@@ -502,11 +529,45 @@ def submit_prompt():
                 'checkResults': check_results
             }), 500
         
-        # Note: Data is now stored in browser localStorage instead of server JSON file
-        # The submission ID is generated and returned to the frontend for storage
-        submission_id = int(datetime.now().timestamp() * 1000)
-        print(f"Submission ID generated: {submission_id}")
-        print("Note: Data will be stored in browser localStorage by the frontend")
+        # Save to database
+        try:
+            # Get or create user
+            # Extract email from employee_name if it's an email, otherwise we need email from request
+            employee_email = request.json.get('employeeEmail', '') if request.is_json else request.form.get('employeeEmail', '')
+            if not employee_email and '@' in employee_name:
+                employee_email = employee_name
+                employee_name = employee_name.split('@')[0]
+            
+            # For now, use employee_name as identifier if no email
+            if not employee_email:
+                employee_email = f"{employee_name}@geoconinc.com"
+            
+            user = get_or_create_user(employee_email, employee_name)
+            update_user_last_login(user)
+            
+            # Generate submission ID
+            submission_id = f"sub-{datetime.now().timestamp()}-{user.id}"
+            
+            # Save submission to database
+            submission = Submission(
+                id=submission_id,
+                user_id=user.id,
+                prompt=prompt,
+                response=chatgpt_response,
+                status=status,
+                check_results=check_results,
+                files_processed=len(file_contents) if file_contents else 0,
+                sharepoint_searched=search_sharepoint,
+                sharepoint_results_count=len(sharepoint_results) if sharepoint_results else 0
+            )
+            db.session.add(submission)
+            db.session.commit()
+            print(f"Submission saved to database with ID: {submission_id}")
+        except Exception as db_error:
+            print(f"WARNING: Failed to save to database: {db_error}")
+            # Continue even if database save fails
+            submission_id = int(datetime.now().timestamp() * 1000)
+        
         print("="*60 + "\n")
         
         return jsonify({
@@ -533,18 +594,177 @@ def submit_prompt():
 
 @app.route('/api/submissions', methods=['GET'])
 def get_submissions():
-    """Get all submissions for IT administration"""
+    """Get all submissions (for admin dashboard) - now from database"""
     try:
-        print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Admin requested submissions list")
-        submissions = load_submissions()
-        print(f"Returning {len(submissions)} submissions")
-        return jsonify({'submissions': submissions})
+        # Get filter parameters
+        employee_filter = request.args.get('employee', 'all')
+        status_filter = request.args.get('status', 'all')
+        
+        query = Submission.query
+        
+        # Apply filters
+        if employee_filter != 'all':
+            user = User.query.filter(
+                (User.email == employee_filter) | (User.name == employee_filter)
+            ).first()
+            if user:
+                query = query.filter_by(user_id=user.id)
+            else:
+                return jsonify([])
+        
+        if status_filter != 'all':
+            query = query.filter_by(status=status_filter)
+        
+        submissions = query.order_by(Submission.timestamp.desc()).all()
+        return jsonify([sub.to_dict() for sub in submissions])
     except Exception as e:
-        print(f"ERROR loading submissions: {str(e)}")
+        print(f"Error getting submissions: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': f'Failed to load submissions: {str(e)}'}), 500
 
+@app.route('/api/admin/stats', methods=['GET'])
+def get_admin_stats():
+    """Get statistics for admin dashboard"""
+    try:
+        total = Submission.query.count()
+        flagged = Submission.query.filter(Submission.status != 'safe').count()
+        danger = Submission.query.filter_by(status='danger').count()
+        unique_users = db.session.query(Submission.user_id).distinct().count()
+        
+        return jsonify({
+            'total': total,
+            'flagged': flagged,
+            'danger': danger,
+            'employees': unique_users
+        })
+    except Exception as e:
+        print(f"Error getting stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users/login', methods=['POST'])
+def login_user():
+    """Login or create user"""
+    try:
+        data = request.json
+        email = data.get('email', '').strip().lower()
+        name = data.get('name', '').strip()
+        password = data.get('password', '')
+        
+        # Validate email format
+        if not email.endswith('@geoconinc.com'):
+            return jsonify({'error': 'Email must be a @geoconinc.com address'}), 400
+        
+        # Validate password
+        DEFAULT_PASSWORD = 'geocon123'
+        if password != DEFAULT_PASSWORD:
+            return jsonify({'error': 'Invalid password'}), 401
+        
+        # Get or create user
+        user = get_or_create_user(email, name)
+        update_user_last_login(user)
+        
+        return jsonify({
+            'success': True,
+            'user': user.to_dict()
+        })
+    except Exception as e:
+        print(f"Error in login: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users/<int:user_id>/conversations', methods=['GET'])
+def get_user_conversations(user_id):
+    """Get all conversations for a user"""
+    try:
+        user = User.query.get_or_404(user_id)
+        conversations = Conversation.query.filter_by(user_id=user_id).order_by(Conversation.updated_at.desc()).all()
+        return jsonify([conv.to_dict() for conv in conversations])
+    except Exception as e:
+        print(f"Error getting conversations: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/conversations', methods=['POST'])
+def create_conversation():
+    """Create a new conversation"""
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+        title = data.get('title', 'New Chat')
+        conversation_id = data.get('id', f'chat-{datetime.now().timestamp()}')
+        
+        user = User.query.get_or_404(user_id)
+        conversation = Conversation(
+            id=conversation_id,
+            user_id=user_id,
+            title=title
+        )
+        db.session.add(conversation)
+        db.session.commit()
+        
+        return jsonify(conversation.to_dict())
+    except Exception as e:
+        print(f"Error creating conversation: {e}")
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/conversations/<conversation_id>/messages', methods=['POST'])
+def add_message():
+    """Add a message to a conversation"""
+    try:
+        data = request.json
+        conversation_id = data.get('conversation_id') or conversation_id
+        role = data.get('role')  # 'user' or 'assistant'
+        content = data.get('content')
+        metadata = data.get('metadata', {})
+        
+        conversation = Conversation.query.get_or_404(conversation_id)
+        message = Message(
+            conversation_id=conversation_id,
+            role=role,
+            content=content,
+            message_metadata=metadata  # Use message_metadata (metadata is reserved in SQLAlchemy)
+        )
+        db.session.add(message)
+        
+        # Update conversation timestamp
+        conversation.updated_at = datetime.utcnow()
+        
+        # If this is an assistant message, create submission record
+        if role == 'assistant':
+            # Find the previous user message in this conversation
+            user_msg = Message.query.filter_by(
+                conversation_id=conversation_id,
+                role='user'
+            ).order_by(Message.timestamp.desc()).first()
+            
+            if user_msg:
+                submission_id = f"{conversation_id}-{user_msg.id}"
+                submission = Submission(
+                    id=submission_id,
+                    user_id=conversation.user_id,
+                    conversation_id=conversation_id,
+                    prompt=user_msg.content,
+                    response=content,
+                    status=metadata.get('confidentialStatus', 'safe'),
+                    check_results=metadata.get('checkResults', []),
+                    files_processed=metadata.get('filesCount', 0),
+                    sharepoint_searched=metadata.get('sharepointSearched', False),
+                    sharepoint_results_count=metadata.get('sharepointResultsCount', 0)
+                )
+                db.session.add(submission)
+        
+        db.session.commit()
+        return jsonify(message.to_dict())
+    except Exception as e:
+        print(f"Error adding message: {e}")
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -591,7 +811,7 @@ if __name__ == '__main__':
     print(f"  Client Secret: {'Configured' if SHAREPOINT_CLIENT_SECRET else 'Not configured'}")
     print(f"  Using Graph API: {SHAREPOINT_USE_GRAPH_API}")
     if not SHAREPOINT_SITE_URL or not SHAREPOINT_CLIENT_ID:
-        print(f"  ⚠️  SharePoint search will be disabled until configured")
+        print(f"  WARNING: SharePoint search will be disabled until configured")
     print(f"\nServer URL: http://localhost:5000")
     print(f"API Endpoint: http://localhost:5000/api/submit")
     print("="*60)
