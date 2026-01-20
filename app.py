@@ -644,23 +644,17 @@ def get_admin_stats():
 
 @app.route('/api/users/login', methods=['POST'])
 def login_user():
-    """Login or create user"""
+    """Login or create user (email-only, no password required)"""
     try:
         data = request.json
         email = data.get('email', '').strip().lower()
         name = data.get('name', '').strip()
-        password = data.get('password', '')
         
         # Validate email format
         if not email.endswith('@geoconinc.com'):
             return jsonify({'error': 'Email must be a @geoconinc.com address'}), 400
         
-        # Validate password
-        DEFAULT_PASSWORD = 'geocon123'
-        if password != DEFAULT_PASSWORD:
-            return jsonify({'error': 'Invalid password'}), 401
-        
-        # Get or create user
+        # Get or create user (no password check)
         user = get_or_create_user(email, name)
         update_user_last_login(user)
         

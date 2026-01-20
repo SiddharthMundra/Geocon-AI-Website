@@ -6,8 +6,7 @@ const STORAGE_KEY_USERS = 'geocon_ai_users';
 const STORAGE_KEY_CURRENT_USER = 'geocon_ai_current_user';
 const STORAGE_KEY_SUBMISSIONS = 'geocon_ai_submissions';
 
-// Default password
-const DEFAULT_PASSWORD = 'geocon123';
+// Password no longer required - email-only login
 
 // State
 let currentUser = null;
@@ -213,11 +212,9 @@ function handleLogin(e) {
     console.log('Login form submitted');
     
     const email = document.getElementById('login-email').value.trim().toLowerCase();
-    const password = document.getElementById('login-password').value;
     const errorDiv = document.getElementById('login-error');
     
     console.log('Email:', email);
-    console.log('Password entered:', password ? '***' : 'empty');
     
     // Validate email format
     if (!email.endsWith('@geoconinc.com')) {
@@ -227,15 +224,7 @@ function handleLogin(e) {
         return;
     }
     
-    // Validate password
-    if (password !== DEFAULT_PASSWORD) {
-        errorDiv.textContent = 'Invalid password';
-        errorDiv.classList.remove('hidden');
-        console.log('Password validation failed');
-        return;
-    }
-    
-    // Login successful
+    // Login successful (no password required)
     console.log('Login successful');
     errorDiv.classList.add('hidden');
     currentUser = { email: email };
