@@ -406,9 +406,9 @@ async function sendMessage() {
     sendIcon.classList.add('hidden');
     sendLoader.classList.remove('hidden');
     
-    // Add loading message
+    // Add loading message with dots animation
     const loadingId = 'loading-' + Date.now();
-    appendMessage('ai', '...', {}, loadingId);
+    appendLoadingMessage(loadingId);
     
     try {
         // Prepare request
@@ -448,18 +448,14 @@ async function sendMessage() {
             throw new Error(data.error || 'Server error');
         }
         
-        // Remove loading message
-        const loadingEl = document.getElementById(loadingId);
-        if (loadingEl) loadingEl.remove();
-        
-        // Add AI response
+        // Replace loading message with AI response (using same ID)
         appendMessage('ai', data.chatgptResponse, {
             confidentialStatus: data.confidentialStatus,
             checkResults: data.checkResults,
             sharepointSearched: data.sharepointSearched || false,
             sharepointResultsCount: data.sharepointResultsCount || 0,
             filesProcessed: data.filesProcessed || 0
-        });
+        }, loadingId);
         
         // Add AI message to chat
         chat.messages.push({
@@ -490,12 +486,8 @@ async function sendMessage() {
     } catch (error) {
         console.error('Error sending message:', error);
         
-        // Remove loading message
-        const loadingEl = document.getElementById(loadingId);
-        if (loadingEl) loadingEl.remove();
-        
-        // Show error message
-        appendMessage('ai', `Error: ${error.message}`, { error: true });
+        // Replace loading message with error message
+        appendMessage('ai', `Error: ${error.message}`, { error: true }, loadingId);
     } finally {
         sendBtn.disabled = false;
         sendIcon.classList.remove('hidden');
@@ -508,9 +500,46 @@ async function sendMessage() {
     }
 }
 
+// Append loading message (just dots, no background)
+function appendLoadingMessage(messageId) {
+    const messagesContainer = document.getElementById('chat-messages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message ai loading-message';
+    messageDiv.id = messageId;
+    
+    messageDiv.innerHTML = `
+        <div class="message-avatar ai">AI</div>
+        <div class="message-content-loading">
+            <div class="typing-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+        </div>
+    `;
+    
+    messagesContainer.appendChild(messageDiv);
+    
+    // Remove welcome message if present
+    const welcomeMsg = messagesContainer.querySelector('.welcome-message');
+    if (welcomeMsg) welcomeMsg.remove();
+    
+    // Scroll to bottom
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
 // Append message to chat
 function appendMessage(role, content, metadata = {}, messageId = null) {
     const messagesContainer = document.getElementById('chat-messages');
+    
+    // If there's a loading message with this ID, replace it
+    if (messageId) {
+        const loadingEl = document.getElementById(messageId);
+        if (loadingEl) {
+            loadingEl.remove();
+        }
+    }
+    
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${role}`;
     if (messageId) messageDiv.id = messageId;
@@ -524,9 +553,7 @@ function appendMessage(role, content, metadata = {}, messageId = null) {
     `;
     
     // Add content
-    if (content === '...') {
-        messageHTML += '<div class="loader"></div>';
-    } else if (metadata.error) {
+    if (metadata.error) {
         messageHTML += `<p style="color: var(--danger-color);">${escapeHtml(content)}</p>`;
     } else {
         messageHTML += formatMessageContent(content);
