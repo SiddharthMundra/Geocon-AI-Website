@@ -87,10 +87,30 @@
 
             <div id="loading" class="loading hidden">
                 <div class="loader"></div>
-                <p>Loading submissions...</p>
+                <p>Loading data...</p>
             </div>
 
-            <div id="submissions-container" class="submissions-container">
+            <!-- Employees List View -->
+            <div id="employees-view" class="employees-view">
+                <h2 class="section-title">Employees</h2>
+                <div id="employees-list" class="employees-list">
+                    <!-- Employees will be loaded here -->
+                </div>
+            </div>
+
+            <!-- Employee Details View (hidden by default) -->
+            <div id="employee-details-view" class="employee-details-view hidden">
+                <div class="employee-details-header">
+                    <button id="back-to-employees-btn" class="btn btn-secondary">← Back to Employees</button>
+                    <h2 id="employee-details-name" class="section-title"></h2>
+                </div>
+                <div id="employee-conversations" class="employee-conversations">
+                    <!-- Conversations will be loaded here -->
+                </div>
+            </div>
+
+            <!-- Legacy submissions view (hidden by default, kept for compatibility) -->
+            <div id="submissions-container" class="submissions-container hidden">
                 <!-- Submissions will be loaded here -->
             </div>
         </div>

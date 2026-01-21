@@ -58,15 +58,48 @@ function setupLoginListeners() {
 }
 
 // Check authentication
-function checkAuth() {
+async function checkAuth() {
     const storedUser = localStorage.getItem(STORAGE_KEY_CURRENT_USER);
     if (storedUser) {
         try {
             currentUser = JSON.parse(storedUser);
-            // Check if user has name set
-            const users = getUsers();
-            const userData = users[currentUser.email];
-            if (userData && userData.name) {
+            
+            // Try to fetch latest user data from database
+            try {
+                const response = await fetch(`${API_BASE_URL}/users/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: currentUser.email })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    // Update with latest data from database
+                    currentUser.name = data.user.name;
+                    currentUser.id = data.user.id;
+                    localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(currentUser));
+                    
+                    // Also update local storage
+                    const users = getUsers();
+                    users[currentUser.email] = {
+                        email: data.user.email,
+                        name: data.user.name,
+                        id: data.user.id
+                    };
+                    saveUsers(users);
+                }
+            } catch (apiError) {
+                console.log('Could not fetch from API, using local data:', apiError);
+                // Fallback to local storage if API fails
+                const users = getUsers();
+                const userData = users[currentUser.email];
+                if (userData && userData.name) {
+                    currentUser.name = userData.name;
+                }
+            }
+            
+            // Check if user has name
+            if (currentUser.name && currentUser.name.trim()) {
                 // User is logged in and has name
                 showApp();
             } else {
@@ -74,6 +107,7 @@ function checkAuth() {
                 showNameSetup();
             }
         } catch (e) {
+            console.error('Error parsing stored user:', e);
             showLogin();
         }
     } else {
@@ -115,7 +149,7 @@ function showApp() {
 }
 
 // Initialize app
-function initializeApp() {
+async function initializeApp() {
     // Display user info
     document.getElementById('user-email-display').textContent = currentUser.email;
     
@@ -131,8 +165,8 @@ function initializeApp() {
     // Add greeting to header
     updateGreeting();
     
-    // Load conversations
-    loadConversations();
+    // Load conversations (async)
+    await loadConversations();
     renderChatHistory();
     
     // Set up event listeners
@@ -167,10 +201,12 @@ function setupEventListeners() {
     // Header logout button
     document.getElementById('header-logout-btn').addEventListener('click', handleLogout);
     
-    // Settings button (placeholder for now)
-    document.getElementById('settings-btn').addEventListener('click', () => {
-        alert('Settings feature coming soon!');
-    });
+    // Settings button
+    document.getElementById('settings-btn').addEventListener('click', showSettings);
+    
+    // Settings form
+    document.getElementById('settings-form').addEventListener('submit', handleSettingsSave);
+    document.getElementById('settings-cancel-btn').addEventListener('click', hideSettings);
     
     // New chat button
     document.getElementById('new-chat-btn').addEventListener('click', createNewChat);
@@ -207,7 +243,7 @@ function setupEventListeners() {
 }
 
 // Handle login
-function handleLogin(e) {
+async function handleLogin(e) {
     e.preventDefault();
     console.log('Login form submitted');
     
@@ -224,28 +260,61 @@ function handleLogin(e) {
         return;
     }
     
-    // Login successful (no password required)
-    console.log('Login successful');
     errorDiv.classList.add('hidden');
-    currentUser = { email: email };
     
-    // Check if user exists and has name
-    const users = getUsers();
-    if (users[email] && users[email].name) {
-        currentUser.name = users[email].name;
+    try {
+        // Login via API to get/create user in database
+        const response = await fetch(`${API_BASE_URL}/users/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Login failed');
+        }
+        
+        const data = await response.json();
+        console.log('Login successful, user data:', data);
+        
+        // Set current user from database
+        currentUser = {
+            email: data.user.email,
+            name: data.user.name,
+            id: data.user.id
+        };
+        
+        // Save to localStorage for offline access
         localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(currentUser));
-        console.log('User has name, showing app');
-        showApp();
-    } else {
-        // First time login - need to set name
-        localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(currentUser));
-        console.log('First time login, showing name setup');
-        showNameSetup();
+        
+        // Also update local users storage
+        const users = getUsers();
+        users[email] = {
+            email: data.user.email,
+            name: data.user.name,
+            id: data.user.id
+        };
+        saveUsers(users);
+        
+        // Check if user has name
+        if (currentUser.name && currentUser.name.trim()) {
+            console.log('User has name, showing app');
+            showApp();
+        } else {
+            // First time login - need to set name
+            console.log('First time login, showing name setup');
+            showNameSetup();
+        }
+    } catch (error) {
+        console.error('Login error:', error);
+        errorDiv.textContent = error.message || 'Login failed. Please try again.';
+        errorDiv.classList.remove('hidden');
     }
 }
 
 // Handle name setup
-function handleNameSetup(e) {
+async function handleNameSetup(e) {
     e.preventDefault();
     const name = document.getElementById('setup-name').value.trim();
     const errorDiv = document.getElementById('name-error');
@@ -256,20 +325,157 @@ function handleNameSetup(e) {
         return;
     }
     
-    // Save user with name
-    const users = getUsers();
-    if (!users[currentUser.email]) {
-        users[currentUser.email] = {};
+    errorDiv.classList.add('hidden');
+    
+    try {
+        // Save name to database via API
+        const response = await fetch(`${API_BASE_URL}/users/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                email: currentUser.email,
+                name: name
+            })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Failed to save name');
+        }
+        
+        const data = await response.json();
+        console.log('Name saved to database:', data);
+        
+        // Update current user
+        currentUser.name = name;
+        currentUser.id = data.user.id;
+        localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(currentUser));
+        
+        // Also save to local storage for offline access
+        const users = getUsers();
+        if (!users[currentUser.email]) {
+            users[currentUser.email] = {};
+        }
+        users[currentUser.email].name = name;
+        users[currentUser.email].email = currentUser.email;
+        users[currentUser.email].id = data.user.id;
+        users[currentUser.email].createdAt = new Date().toISOString();
+        saveUsers(users);
+        
+        showApp();
+    } catch (error) {
+        console.error('Error saving name:', error);
+        errorDiv.textContent = error.message || 'Failed to save name. Please try again.';
+        errorDiv.classList.remove('hidden');
     }
-    users[currentUser.email].name = name;
-    users[currentUser.email].email = currentUser.email;
-    users[currentUser.email].createdAt = new Date().toISOString();
-    saveUsers(users);
+}
+
+// Show settings modal
+function showSettings() {
+    const settingsModal = document.getElementById('settings-modal');
+    const nameInput = document.getElementById('settings-name');
     
-    currentUser.name = name;
-    localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(currentUser));
+    // Populate current name
+    if (currentUser && currentUser.name) {
+        nameInput.value = currentUser.name;
+    }
     
-    showApp();
+    settingsModal.classList.remove('hidden');
+}
+
+// Hide settings modal
+function hideSettings() {
+    document.getElementById('settings-modal').classList.add('hidden');
+    document.getElementById('settings-error').classList.add('hidden');
+}
+
+// Handle settings save
+async function handleSettingsSave(e) {
+    e.preventDefault();
+    const newName = document.getElementById('settings-name').value.trim();
+    const errorDiv = document.getElementById('settings-error');
+    
+    if (!newName) {
+        errorDiv.textContent = 'Name is required';
+        errorDiv.classList.remove('hidden');
+        return;
+    }
+    
+    if (!currentUser || !currentUser.id) {
+        errorDiv.textContent = 'User not found. Please log in again.';
+        errorDiv.classList.remove('hidden');
+        return;
+    }
+    
+    errorDiv.classList.add('hidden');
+    
+    try {
+        // Update name in database via API
+        const response = await fetch(`${API_BASE_URL}/users/${currentUser.id}/update-name`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                name: newName
+            })
+        });
+        
+        // Check response status first
+        if (!response.ok) {
+            // Try to get JSON error, but handle HTML errors
+            let errorMessage = 'Failed to update name';
+            try {
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('application/json')) {
+                    const errorData = await response.json();
+                    errorMessage = errorData.error || errorMessage;
+                } else {
+                    const text = await response.text();
+                    console.error('Non-JSON error response:', text.substring(0, 200));
+                    errorMessage = `Server error (${response.status}). Please check the console.`;
+                }
+            } catch (e) {
+                errorMessage = `Server error (${response.status})`;
+            }
+            throw new Error(errorMessage);
+        }
+        
+        // Parse successful JSON response
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            const text = await response.text();
+            console.error('Non-JSON response:', text.substring(0, 200));
+            throw new Error('Server returned an invalid response format.');
+        }
+        
+        const data = await response.json();
+        console.log('Name updated in database:', data);
+        
+        // Update current user
+        currentUser.name = newName;
+        localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(currentUser));
+        
+        // Also update local storage
+        const users = getUsers();
+        if (!users[currentUser.email]) {
+            users[currentUser.email] = {};
+        }
+        users[currentUser.email].name = newName;
+        users[currentUser.email].id = currentUser.id;
+        saveUsers(users);
+        
+        // Update greeting
+        updateGreeting();
+        
+        // Hide settings modal
+        hideSettings();
+        
+        // Show success message
+        alert('Display name updated successfully!');
+    } catch (error) {
+        console.error('Error updating name:', error);
+        errorDiv.textContent = error.message || 'Failed to update name. Please try again.';
+        errorDiv.classList.remove('hidden');
+    }
 }
 
 // Handle logout
@@ -776,8 +982,38 @@ function removeFile(index) {
     renderFileList();
 }
 
-// Load conversations
-function loadConversations() {
+// Load conversations from both database and localStorage
+async function loadConversations() {
+    // First try to load from database
+    if (currentUser && currentUser.id) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/users/${currentUser.id}/conversations`);
+            if (response.ok) {
+                const dbConversations = await response.json();
+                if (dbConversations && dbConversations.length > 0) {
+                    // Convert database format to local format
+                    conversations = dbConversations.map(conv => ({
+                        id: conv.id,
+                        title: conv.title,
+                        messages: conv.messages || [],
+                        createdAt: conv.created_at,
+                        updatedAt: conv.updated_at,
+                        employeeName: conv.employeeName || currentUser.name,
+                        employeeEmail: conv.employeeEmail || currentUser.email
+                    }));
+                    // Sort by updatedAt (newest first)
+                    conversations.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+                    // Save to localStorage for offline access
+                    saveConversations();
+                    return;
+                }
+            }
+        } catch (error) {
+            console.log('Could not load from database, using localStorage:', error);
+        }
+    }
+    
+    // Fallback to localStorage
     const users = getUsers();
     const userData = users[currentUser.email];
     if (userData && userData.conversations) {
@@ -789,8 +1025,9 @@ function loadConversations() {
     }
 }
 
-// Save conversations
-function saveConversations() {
+// Save conversations to both database and localStorage
+async function saveConversations() {
+    // Save to localStorage for offline access
     const users = getUsers();
     if (!users[currentUser.email]) {
         users[currentUser.email] = {};
@@ -799,6 +1036,58 @@ function saveConversations() {
     users[currentUser.email].name = currentUser.name;
     users[currentUser.email].email = currentUser.email;
     saveUsers(users);
+    
+    // Also save to database if user has ID
+    if (currentUser && currentUser.id) {
+        try {
+            // Save each conversation to database
+            for (const chat of conversations) {
+                await saveConversationToDatabase(chat);
+            }
+        } catch (error) {
+            console.error('Error saving conversations to database:', error);
+            // Continue even if database save fails
+        }
+    }
+}
+
+// Save a single conversation to database
+async function saveConversationToDatabase(chat) {
+    if (!currentUser || !currentUser.id) return;
+    
+    try {
+        // Create or update conversation
+        let response = await fetch(`${API_BASE_URL}/conversations`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user_id: currentUser.id,
+                id: chat.id,
+                title: chat.title || 'New Chat'
+            })
+        });
+        
+        if (!response.ok) {
+            console.warn('Failed to save conversation to database:', await response.text());
+            return;
+        }
+        
+        // Save all messages
+        for (const message of chat.messages) {
+            await fetch(`${API_BASE_URL}/conversations/${chat.id}/messages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    conversation_id: chat.id,
+                    role: message.role,
+                    content: message.content,
+                    metadata: message.metadata || {}
+                })
+            });
+        }
+    } catch (error) {
+        console.error('Error saving conversation to database:', error);
+    }
 }
 
 // Save to admin submissions (for backward compatibility)

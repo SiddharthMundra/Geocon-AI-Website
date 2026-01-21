@@ -630,16 +630,88 @@ def get_admin_stats():
         total = Submission.query.count()
         flagged = Submission.query.filter(Submission.status != 'safe').count()
         danger = Submission.query.filter_by(status='danger').count()
-        unique_users = db.session.query(Submission.user_id).distinct().count()
+        # Count all users in database (not just those with submissions)
+        total_employees = User.query.count()
+        # Count users with submissions
+        users_with_submissions = db.session.query(Submission.user_id).distinct().count()
         
         return jsonify({
             'total': total,
             'flagged': flagged,
             'danger': danger,
-            'employees': unique_users
+            'employees': total_employees  # Total employees who have logged in
         })
     except Exception as e:
         print(f"Error getting stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/admin/employees', methods=['GET'])
+def get_all_employees():
+    """Get all employees with their stats"""
+    try:
+        employees = User.query.order_by(User.name).all()
+        employee_list = []
+        
+        for user in employees:
+            # Get stats for this user
+            submissions_count = Submission.query.filter_by(user_id=user.id).count()
+            flagged_count = Submission.query.filter_by(user_id=user.id).filter(Submission.status != 'safe').count()
+            danger_count = Submission.query.filter_by(user_id=user.id).filter_by(status='danger').count()
+            conversations_count = Conversation.query.filter_by(user_id=user.id).count()
+            
+            employee_list.append({
+                'id': user.id,
+                'email': user.email,
+                'name': user.name,
+                'created_at': user.created_at.isoformat() if user.created_at else None,
+                'last_login': user.last_login.isoformat() if user.last_login else None,
+                'submissions_count': submissions_count,
+                'flagged_count': flagged_count,
+                'danger_count': danger_count,
+                'conversations_count': conversations_count
+            })
+        
+        return jsonify(employee_list)
+    except Exception as e:
+        print(f"Error getting employees: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/admin/employees/<int:user_id>/conversations', methods=['GET'])
+def get_employee_conversations(user_id):
+    """Get all conversations for a specific employee"""
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        conversations = Conversation.query.filter_by(user_id=user_id).order_by(Conversation.updated_at.desc()).all()
+        
+        # Get submission stats for each conversation
+        conversation_list = []
+        for conv in conversations:
+            messages_count = Message.query.filter_by(conversation_id=conv.id).count()
+            submissions_count = Submission.query.filter_by(conversation_id=conv.id).count()
+            
+            conversation_list.append({
+                'id': conv.id,
+                'title': conv.title,
+                'created_at': conv.created_at.isoformat() if conv.created_at else None,
+                'updated_at': conv.updated_at.isoformat() if conv.updated_at else None,
+                'messages_count': messages_count,
+                'submissions_count': submissions_count,
+                'messages': [msg.to_dict() for msg in conv.messages[:10]]  # First 10 messages as preview
+            })
+        
+        return jsonify({
+            'user': user.to_dict(),
+            'conversations': conversation_list
+        })
+    except Exception as e:
+        print(f"Error getting employee conversations: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/users/login', methods=['POST'])
@@ -668,38 +740,100 @@ def login_user():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/users/<int:user_id>/update-name', methods=['POST'])
+def update_user_name(user_id):
+    """Update user's display name"""
+    try:
+        if not request.is_json:
+            return jsonify({'error': 'Content-Type must be application/json'}), 400
+        
+        data = request.json
+        if not data:
+            return jsonify({'error': 'Request body is required'}), 400
+        
+        new_name = data.get('name', '').strip()
+        
+        if not new_name:
+            return jsonify({'error': 'Name is required'}), 400
+        
+        # Get user - return JSON error if not found instead of HTML 404
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'error': f'User with ID {user_id} not found'}), 404
+        
+        # Only update name, preserve email
+        original_email = user.email
+        user.name = new_name
+        db.session.commit()
+        
+        # Verify email wasn't changed
+        if user.email != original_email:
+            print(f"WARNING: Email was changed during name update! Restoring...")
+            user.email = original_email
+            db.session.commit()
+        
+        print(f"Updated user {user.email} name to: {new_name} (email preserved)")
+        
+        return jsonify({
+            'success': True,
+            'user': user.to_dict()
+        })
+    except Exception as e:
+        print(f"Error updating user name: {e}")
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/users/<int:user_id>/conversations', methods=['GET'])
 def get_user_conversations(user_id):
     """Get all conversations for a user"""
     try:
-        user = User.query.get_or_404(user_id)
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
         conversations = Conversation.query.filter_by(user_id=user_id).order_by(Conversation.updated_at.desc()).all()
         return jsonify([conv.to_dict() for conv in conversations])
     except Exception as e:
         print(f"Error getting conversations: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/conversations', methods=['POST'])
 def create_conversation():
-    """Create a new conversation"""
+    """Create a new conversation (or update if exists)"""
     try:
         data = request.json
         user_id = data.get('user_id')
         title = data.get('title', 'New Chat')
         conversation_id = data.get('id', f'chat-{datetime.now().timestamp()}')
         
-        user = User.query.get_or_404(user_id)
-        conversation = Conversation(
-            id=conversation_id,
-            user_id=user_id,
-            title=title
-        )
-        db.session.add(conversation)
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Check if conversation already exists
+        conversation = Conversation.query.get(conversation_id)
+        if conversation:
+            # Update existing conversation
+            conversation.title = title
+            conversation.updated_at = datetime.utcnow()
+        else:
+            # Create new conversation
+            conversation = Conversation(
+                id=conversation_id,
+                user_id=user_id,
+                title=title
+            )
+            db.session.add(conversation)
+        
         db.session.commit()
         
         return jsonify(conversation.to_dict())
     except Exception as e:
-        print(f"Error creating conversation: {e}")
+        print(f"Error creating/updating conversation: {e}")
         db.session.rollback()
         import traceback
         traceback.print_exc()
@@ -782,6 +916,10 @@ def admin():
 @app.route('/<path:path>')
 def serve_static(path):
     """Serve static files (CSS, JS, images, etc.)"""
+    # Don't catch API routes - they should be handled by their specific routes
+    if path.startswith('api/'):
+        return jsonify({'error': 'API endpoint not found'}), 404
+    
     # Security: Only serve files from allowed extensions
     allowed_extensions = ['.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.json']
     if any(path.endswith(ext) for ext in allowed_extensions):

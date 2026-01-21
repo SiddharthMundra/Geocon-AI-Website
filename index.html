@@ -57,6 +57,34 @@
         </div>
     </div>
 
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="login-modal hidden">
+        <div class="login-container">
+            <div class="login-header">
+                <h2>Settings</h2>
+                <p>Manage your account settings</p>
+            </div>
+            <form id="settings-form" class="login-form">
+                <div class="form-group">
+                    <label for="settings-name">Display Name</label>
+                    <input 
+                        type="text" 
+                        id="settings-name" 
+                        placeholder="Enter your display name" 
+                        required
+                        autocomplete="name"
+                    >
+                    <small class="form-hint">This name will be displayed in your conversations</small>
+                </div>
+                <div id="settings-error" class="login-error hidden"></div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" id="settings-cancel-btn">Cancel</button>
+                    <button type="submit" class="btn-login">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div class="app-container hidden">
         <!-- Sidebar -->
         <aside class="sidebar">

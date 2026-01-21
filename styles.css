@@ -930,6 +930,35 @@ body {
     background: var(--primary-dark);
 }
 
+.btn-secondary {
+    background: var(--bg-color);
+    color: var(--text-primary);
+    border: 2px solid var(--border-color);
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: inherit;
+}
+
+.btn-secondary:hover {
+    background: var(--border-color);
+}
+
+.form-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.form-actions .btn-login,
+.form-actions .btn-secondary {
+    flex: 1;
+    width: auto;
+}
+
 .login-error {
     background: #f8d7da;
     color: #721c24;

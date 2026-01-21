@@ -6,22 +6,27 @@ const STORAGE_KEY_USERS = 'geocon_ai_users';
 let allSubmissions = [];
 let filteredSubmissions = [];
 let employees = [];
+let selectedEmployeeId = null;
+let currentView = 'employees'; // 'employees' or 'details'
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     initializeAdmin();
-    loadSubmissions();
+    loadEmployees();
 });
 
 function initializeAdmin() {
     const refreshBtn = document.getElementById('refresh-btn');
     const exportBtn = document.getElementById('export-btn');
     const clearBtn = document.getElementById('clear-btn');
-    const employeeFilter = document.getElementById('employee-filter');
-    const statusFilter = document.getElementById('status-filter');
+    const backBtn = document.getElementById('back-to-employees-btn');
     
     refreshBtn.addEventListener('click', () => {
-        loadSubmissions();
+        if (currentView === 'employees') {
+            loadEmployees();
+        } else {
+            loadEmployeeDetails(selectedEmployeeId);
+        }
     });
     
     exportBtn.addEventListener('click', () => {
@@ -32,54 +37,87 @@ function initializeAdmin() {
         clearAllData();
     });
     
-    employeeFilter.addEventListener('change', () => {
-        applyFilters();
-    });
-    
-    statusFilter.addEventListener('change', () => {
-        applyFilters();
-    });
+    if (backBtn) {
+        backBtn.addEventListener('click', () => {
+            showEmployeesView();
+        });
+    }
 }
 
-function loadSubmissions() {
+async function loadSubmissions() {
     const container = document.getElementById('submissions-container');
     const loading = document.getElementById('loading');
     
     container.innerHTML = '';
     loading.classList.remove('hidden');
     
-    setTimeout(() => {
-        try {
-            // Get submissions from both sources
+    try {
+        // Fetch stats from database API
+        const statsResponse = await fetch(`${window.location.origin}/api/admin/stats`);
+        if (statsResponse.ok) {
+            const stats = await statsResponse.json();
+            updateStatsFromAPI(stats);
+        }
+        
+        // Fetch submissions from database API
+        const submissionsResponse = await fetch(`${window.location.origin}/api/submissions`);
+        if (submissionsResponse.ok) {
+            const submissions = await submissionsResponse.json();
+            allSubmissions = submissions;
+            console.log(`Loaded ${allSubmissions.length} submissions from database`);
+        } else {
+            // Fallback to localStorage if API fails
+            console.log('API failed, falling back to localStorage');
             allSubmissions = getAllSubmissions();
-            
-            console.log(`Loaded ${allSubmissions.length} submissions from storage`);
-            
-            // Extract unique employees
-            extractEmployees();
-            
-            // Update employee filter dropdown
-            updateEmployeeFilter();
-            
-            // Update stats
+        }
+        
+        // Extract unique employees
+        extractEmployees();
+        
+        // Update employee filter dropdown
+        updateEmployeeFilter();
+        
+        // Update stats (will use API stats if available)
+        if (!statsResponse || !statsResponse.ok) {
             updateStats(allSubmissions);
-            
-            // Apply filters and display
+        }
+        
+        // Apply filters and display
+        applyFilters();
+        
+    } catch (error) {
+        console.error('Error loading submissions:', error);
+        // Fallback to localStorage
+        try {
+            allSubmissions = getAllSubmissions();
+            updateStats(allSubmissions);
+            extractEmployees();
+            updateEmployeeFilter();
             applyFilters();
-            
-        } catch (error) {
-            console.error('Error loading submissions:', error);
+        } catch (fallbackError) {
             container.innerHTML = `
                 <div class="error-message">
                     <h3>Error Loading Submissions</h3>
                     <p>${error.message}</p>
-                    <p>Data is stored in your browser's localStorage.</p>
+                    <p>Please refresh the page or check your connection.</p>
                 </div>
             `;
-        } finally {
-            loading.classList.add('hidden');
         }
-    }, 300);
+    } finally {
+        loading.classList.add('hidden');
+    }
+}
+
+function updateStatsFromAPI(stats) {
+    const totalCountEl = document.getElementById('total-count');
+    const employeeCountEl = document.getElementById('employee-count');
+    const flaggedCountEl = document.getElementById('flagged-count');
+    const dangerCountEl = document.getElementById('danger-count');
+    
+    if (totalCountEl) totalCountEl.textContent = stats.total || 0;
+    if (employeeCountEl) employeeCountEl.textContent = stats.employees || 0;
+    if (flaggedCountEl) flaggedCountEl.textContent = stats.flagged || 0;
+    if (dangerCountEl) dangerCountEl.textContent = stats.danger || 0;
 }
 
 function getAllSubmissions() {
@@ -382,13 +420,197 @@ function clearAllData() {
                 localStorage.removeItem('geocon_ai_current_user');
                 console.log('All data cleared from localStorage');
                 alert('All data has been cleared.');
-                loadSubmissions(); // Refresh the display
+                if (currentView === 'employees') {
+                    loadEmployees();
+                } else {
+                    loadEmployeeDetails(selectedEmployeeId);
+                }
             } catch (error) {
                 alert(`Error clearing data: ${error.message}`);
                 console.error('Clear error:', error);
             }
         }
     }
+}
+
+// Load employees list
+async function loadEmployees() {
+    const employeesList = document.getElementById('employees-list');
+    const loading = document.getElementById('loading');
+    
+    employeesList.innerHTML = '';
+    loading.classList.remove('hidden');
+    currentView = 'employees';
+    
+    try {
+        // Fetch stats from database API
+        const statsResponse = await fetch(`${window.location.origin}/api/admin/stats`);
+        if (statsResponse.ok) {
+            const stats = await statsResponse.json();
+            updateStatsFromAPI(stats);
+        }
+        
+        // Fetch employees from database API
+        const employeesResponse = await fetch(`${window.location.origin}/api/admin/employees`);
+        if (employeesResponse.ok) {
+            employees = await employeesResponse.json();
+            console.log(`Loaded ${employees.length} employees from database`);
+            displayEmployees();
+        } else {
+            throw new Error('Failed to load employees');
+        }
+        
+    } catch (error) {
+        console.error('Error loading employees:', error);
+        employeesList.innerHTML = `
+            <div class="error-message">
+                <h3>Error Loading Employees</h3>
+                <p>${error.message}</p>
+                <p>Please refresh the page or check your connection.</p>
+            </div>
+        `;
+    } finally {
+        loading.classList.add('hidden');
+    }
+}
+
+// Display employees list
+function displayEmployees() {
+    const employeesList = document.getElementById('employees-list');
+    
+    if (employees.length === 0) {
+        employeesList.innerHTML = '<div class="empty-state">No employees found</div>';
+        return;
+    }
+    
+    employeesList.innerHTML = employees.map(emp => `
+        <div class="employee-card" data-employee-id="${emp.id}">
+            <div class="employee-card-header">
+                <div class="employee-info">
+                    <h3 class="employee-name">${escapeHtml(emp.name || emp.email)}</h3>
+                    <p class="employee-email">${escapeHtml(emp.email)}</p>
+                </div>
+                <div class="employee-stats">
+                    <div class="employee-stat">
+                        <span class="stat-value">${emp.conversations_count || 0}</span>
+                        <span class="stat-label">Chats</span>
+                    </div>
+                    <div class="employee-stat">
+                        <span class="stat-value">${emp.submissions_count || 0}</span>
+                        <span class="stat-label">Submissions</span>
+                    </div>
+                    ${emp.flagged_count > 0 ? `
+                    <div class="employee-stat warning">
+                        <span class="stat-value">${emp.flagged_count}</span>
+                        <span class="stat-label">Flagged</span>
+                    </div>
+                    ` : ''}
+                    ${emp.danger_count > 0 ? `
+                    <div class="employee-stat danger">
+                        <span class="stat-value">${emp.danger_count}</span>
+                        <span class="stat-label">Unsafe</span>
+                    </div>
+                    ` : ''}
+                </div>
+            </div>
+            <div class="employee-card-footer">
+                <span class="last-login">Last login: ${emp.last_login ? new Date(emp.last_login).toLocaleString() : 'Never'}</span>
+            </div>
+        </div>
+    `).join('');
+    
+    // Add click handlers
+    employeesList.querySelectorAll('.employee-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const employeeId = parseInt(card.dataset.employeeId);
+            loadEmployeeDetails(employeeId);
+        });
+    });
+}
+
+// Load employee details and conversations
+async function loadEmployeeDetails(userId) {
+    const loading = document.getElementById('loading');
+    const employeesView = document.getElementById('employees-view');
+    const detailsView = document.getElementById('employee-details-view');
+    const conversationsContainer = document.getElementById('employee-conversations');
+    const employeeNameEl = document.getElementById('employee-details-name');
+    
+    loading.classList.remove('hidden');
+    selectedEmployeeId = userId;
+    currentView = 'details';
+    
+    // Hide employees view, show details view
+    employeesView.classList.add('hidden');
+    detailsView.classList.remove('hidden');
+    
+    try {
+        const response = await fetch(`${window.location.origin}/api/admin/employees/${userId}/conversations`);
+        if (!response.ok) {
+            throw new Error('Failed to load employee conversations');
+        }
+        
+        const data = await response.json();
+        const user = data.user;
+        const conversations = data.conversations;
+        
+        // Update header
+        employeeNameEl.textContent = `${user.name} (${user.email})`;
+        
+        // Display conversations
+        if (conversations.length === 0) {
+            conversationsContainer.innerHTML = '<div class="empty-state">No conversations found for this employee</div>';
+        } else {
+            conversationsContainer.innerHTML = conversations.map(conv => `
+                <div class="conversation-card">
+                    <div class="conversation-header">
+                        <h4 class="conversation-title">${escapeHtml(conv.title)}</h4>
+                        <div class="conversation-meta">
+                            <span>${conv.messages_count} messages</span>
+                            <span>•</span>
+                            <span>${conv.submissions_count} submissions</span>
+                            <span>•</span>
+                            <span>${new Date(conv.updated_at).toLocaleString()}</span>
+                        </div>
+                    </div>
+                    <div class="conversation-preview">
+                        ${conv.messages && conv.messages.length > 0 ? `
+                            <div class="message-preview">
+                                ${conv.messages.slice(0, 3).map(msg => `
+                                    <div class="preview-message ${msg.role}">
+                                        <strong>${msg.role === 'user' ? 'User' : 'AI'}:</strong>
+                                        ${escapeHtml(msg.content.substring(0, 150))}${msg.content.length > 150 ? '...' : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        ` : '<p class="no-messages">No messages in this conversation</p>'}
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+    } catch (error) {
+        console.error('Error loading employee details:', error);
+        conversationsContainer.innerHTML = `
+            <div class="error-message">
+                <h3>Error Loading Conversations</h3>
+                <p>${error.message}</p>
+            </div>
+        `;
+    } finally {
+        loading.classList.add('hidden');
+    }
+}
+
+// Show employees view
+function showEmployeesView() {
+    const employeesView = document.getElementById('employees-view');
+    const detailsView = document.getElementById('employee-details-view');
+    
+    employeesView.classList.remove('hidden');
+    detailsView.classList.add('hidden');
+    currentView = 'employees';
+    selectedEmployeeId = null;
 }
 
 function escapeHtml(text) {
