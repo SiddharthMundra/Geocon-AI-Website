@@ -30,6 +30,22 @@ if not DATABASE_URL or DATABASE_URL.strip() == '':
     print("ERROR: DATABASE_URL is empty or None! Falling back to SQLite.")
     DATABASE_URL = 'sqlite:///geocon_ai.db'  # Fallback to SQLite
 
+# Check if we're using psycopg (v3) instead of psycopg2
+# If psycopg is installed, use it; otherwise use psycopg2
+try:
+    import psycopg
+    # Use psycopg driver (version 3) - works with Python 3.13
+    if DATABASE_URL.startswith('postgresql://'):
+        DATABASE_URL = DATABASE_URL.replace('postgresql://', 'postgresql+psycopg://', 1)
+    print(f"Using psycopg (v3) driver for PostgreSQL")
+except ImportError:
+    try:
+        import psycopg2
+        # Use psycopg2 driver (version 2) - works with Python < 3.13
+        print(f"Using psycopg2 driver for PostgreSQL")
+    except ImportError:
+        print("WARNING: Neither psycopg nor psycopg2 found! Database may not work.")
+
 print(f"Database URL configured: {DATABASE_URL[:50]}...")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
