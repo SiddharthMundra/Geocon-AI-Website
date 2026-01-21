@@ -4,6 +4,7 @@ Uses SQLAlchemy ORM with PostgreSQL
 """
 
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text
 from datetime import datetime
 import json
 
@@ -115,23 +116,33 @@ class Submission(db.Model):
 def init_db(app):
     """Initialize database with Flask app"""
     try:
+        # Initialize SQLAlchemy with app (no bind key)
         db.init_app(app)
+        
         with app.app_context():
             # Test connection first
             try:
-                db.engine.connect()
-                print("Database connection successful")
+                # Get the engine and test connection
+                engine = db.get_engine()
+                with engine.connect() as conn:
+                    conn.execute(text("SELECT 1"))
+                print("[OK] Database connection test successful")
             except Exception as conn_error:
                 print(f"WARNING: Database connection test failed: {conn_error}")
-                print("Tables will still be created, but connection may fail at runtime")
+                print("This might be a temporary issue. Tables will still be created.")
+                import traceback
+                traceback.print_exc()
             
+            # Create all tables
             db.create_all()
-            print("Database tables created successfully")
+            print("[OK] Database tables created/verified successfully")
+            
     except Exception as e:
         print(f"ERROR in init_db: {e}")
         import traceback
         traceback.print_exc()
-        raise
+        # Don't raise - let app continue but database features won't work
+        print("WARNING: Database initialization failed. App will continue but database features may not work.")
 
 def get_or_create_user(email, name=None):
     """Get existing user or create new one"""

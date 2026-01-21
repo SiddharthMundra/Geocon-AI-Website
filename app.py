@@ -44,6 +44,9 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
 if 'SQLALCHEMY_BINDS' in app.config:
     del app.config['SQLALCHEMY_BINDS']
 
+# Explicitly set to use default bind (no bind key)
+app.config.pop('SQLALCHEMY_BINDS', None)
+
 # Initialize database
 try:
     init_db(app)
