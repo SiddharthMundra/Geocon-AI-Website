@@ -114,25 +114,49 @@ class Submission(db.Model):
 # Helper functions
 def init_db(app):
     """Initialize database with Flask app"""
-    db.init_app(app)
-    with app.app_context():
-        db.create_all()
-        print("Database tables created successfully")
+    try:
+        db.init_app(app)
+        with app.app_context():
+            # Test connection first
+            try:
+                db.engine.connect()
+                print("Database connection successful")
+            except Exception as conn_error:
+                print(f"WARNING: Database connection test failed: {conn_error}")
+                print("Tables will still be created, but connection may fail at runtime")
+            
+            db.create_all()
+            print("Database tables created successfully")
+    except Exception as e:
+        print(f"ERROR in init_db: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 def get_or_create_user(email, name=None):
     """Get existing user or create new one"""
-    user = User.query.filter_by(email=email).first()
-    if not user:
-        user = User(email=email, name=name or email.split('@')[0])
-        db.session.add(user)
-        db.session.commit()
-    elif name and user.name != name:
-        # Update name if provided and different
-        user.name = name
-        db.session.commit()
-    return user
+    try:
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            user = User(email=email, name=name or email.split('@')[0])
+            db.session.add(user)
+            db.session.commit()
+        elif name and user.name != name:
+            # Update name if provided and different
+            user.name = name
+            db.session.commit()
+        return user
+    except Exception as e:
+        print(f"Error in get_or_create_user: {e}")
+        db.session.rollback()
+        raise
 
 def update_user_last_login(user):
     """Update user's last login timestamp"""
-    user.last_login = datetime.utcnow()
-    db.session.commit()
+    try:
+        user.last_login = datetime.utcnow()
+        db.session.commit()
+    except Exception as e:
+        print(f"Error updating last login: {e}")
+        db.session.rollback()
+        raise

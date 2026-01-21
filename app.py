@@ -17,13 +17,20 @@ CORS(app)  # Enable CORS for frontend requests
 # Database configuration
 # Use DATABASE_URL from environment, or use the provided Render database URL
 DATABASE_URL = os.getenv('DATABASE_URL')
-if not DATABASE_URL:
+if not DATABASE_URL or DATABASE_URL.strip() == '':
     # Default to the Render PostgreSQL database URL
     DATABASE_URL = "postgresql://test_aiwebsite_sql_user:x7FrVTKtQCs1C8kdOdWsAadnpChkX1bP@dpg-d5nccmje5dus73f2rcs0-a.oregon-postgres.render.com/test_aiwebsite_sql"
 
 # Render PostgreSQL URLs sometimes need sslmode
-if DATABASE_URL.startswith('postgres://'):
+if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+
+# Ensure DATABASE_URL is valid
+if not DATABASE_URL or DATABASE_URL.strip() == '':
+    print("ERROR: DATABASE_URL is empty or None! Falling back to SQLite.")
+    DATABASE_URL = 'sqlite:///geocon_ai.db'  # Fallback to SQLite
+
+print(f"Database URL configured: {DATABASE_URL[:50]}...")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -31,6 +38,11 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_pre_ping': True,  # Verify connections before using
     'pool_recycle': 300,    # Recycle connections after 5 minutes
 }
+
+# Ensure no bind key is set (use default)
+# Remove SQLALCHEMY_BINDS if it exists to avoid bind key errors
+if 'SQLALCHEMY_BINDS' in app.config:
+    del app.config['SQLALCHEMY_BINDS']
 
 # Initialize database
 try:
@@ -727,6 +739,7 @@ def login_user():
             return jsonify({'error': 'Email must be a @geoconinc.com address'}), 400
         
         # Get or create user (no password check)
+        # Flask routes already run in app context, so no need to wrap
         user = get_or_create_user(email, name)
         update_user_last_login(user)
         
@@ -738,7 +751,7 @@ def login_user():
         print(f"Error in login: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'Login failed: {str(e)}'}), 500
 
 @app.route('/api/users/<int:user_id>/update-name', methods=['POST'])
 def update_user_name(user_id):
