@@ -19,6 +19,8 @@ class User(db.Model):
     name = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime)
+    session_token = db.Column(db.String(255), nullable=True, index=True)  # Session token for persistent login
+    session_expires = db.Column(db.DateTime, nullable=True)  # Token expiration time
     
     # Relationships
     conversations = db.relationship('Conversation', backref='user', lazy=True, cascade='all, delete-orphan')
@@ -30,7 +32,8 @@ class User(db.Model):
             'email': self.email,
             'name': self.name,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'last_login': self.last_login.isoformat() if self.last_login else None
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+            'session_token': self.session_token  # Include token in response
         }
 
 # Conversation Model
@@ -277,29 +280,94 @@ def init_db(app):
                     
                     if not column_exists:
                         print("Migrating: Adding is_deleted column to conversations table...")
-                        # Add column (works for both PostgreSQL and SQLite)
-                        conn.execute(text("""
-                            ALTER TABLE conversations 
-                            ADD COLUMN is_deleted BOOLEAN DEFAULT 0
-                        """))
-                        conn.commit()
-                        # Create index (only for PostgreSQL, SQLite doesn't support IF NOT EXISTS in CREATE INDEX)
-                        if is_postgresql:
-                            try:
+                        try:
+                            # Add column (works for both PostgreSQL and SQLite)
+                            # Use DEFAULT FALSE for PostgreSQL, DEFAULT 0 for SQLite
+                            if is_postgresql:
+                                # PostgreSQL: Try to add column (will fail if exists, but that's OK)
+                                try:
+                                    conn.execute(text("""
+                                        ALTER TABLE conversations 
+                                        ADD COLUMN is_deleted BOOLEAN DEFAULT FALSE
+                                    """))
+                                    conn.commit()
+                                except Exception as add_col_error:
+                                    # Column might already exist (race condition), check again
+                                    error_str = str(add_col_error).lower()
+                                    if 'already exists' in error_str or 'duplicate' in error_str:
+                                        print("  [INFO] Column already exists (race condition)")
+                                        conn.rollback()
+                                    else:
+                                        raise
+                            else:
+                                # SQLite: Add column
                                 conn.execute(text("""
-                                    CREATE INDEX IF NOT EXISTS ix_conversations_is_deleted 
-                                    ON conversations(is_deleted)
+                                    ALTER TABLE conversations 
+                                    ADD COLUMN is_deleted BOOLEAN DEFAULT 0
                                 """))
                                 conn.commit()
-                            except Exception as idx_error:
-                                # Index might already exist, that's OK
-                                print(f"  [INFO] Index creation: {idx_error}")
-                        print("[OK] Migration complete: is_deleted column added")
+                            
+                            # Create index (only for PostgreSQL, SQLite doesn't support IF NOT EXISTS in CREATE INDEX)
+                            if is_postgresql:
+                                try:
+                                    conn.execute(text("""
+                                        CREATE INDEX IF NOT EXISTS ix_conversations_is_deleted 
+                                        ON conversations(is_deleted)
+                                    """))
+                                    conn.commit()
+                                except Exception as idx_error:
+                                    # Index might already exist, that's OK
+                                    print(f"  [INFO] Index creation: {idx_error}")
+                            
+                            # Update existing rows to set is_deleted = FALSE
+                            if is_postgresql:
+                                conn.execute(text("""
+                                    UPDATE conversations 
+                                    SET is_deleted = FALSE 
+                                    WHERE is_deleted IS NULL
+                                """))
+                            else:
+                                conn.execute(text("""
+                                    UPDATE conversations 
+                                    SET is_deleted = 0 
+                                    WHERE is_deleted IS NULL
+                                """))
+                            conn.commit()
+                            
+                            print("[OK] Migration complete: is_deleted column added and existing rows updated")
+                        except Exception as migration_error:
+                            print(f"  [ERROR] Migration failed: {migration_error}")
+                            conn.rollback()
+                            raise
                     else:
                         print("[OK] is_deleted column already exists")
             except Exception as migrate_error:
                 # Table might not exist yet (first run), that's OK
-                print(f"[INFO] Migration check: {migrate_error}")
+                # But if it's a column check error, try to add the column anyway
+                error_str = str(migrate_error).lower()
+                if 'no such table' not in error_str and 'does not exist' not in error_str:
+                    # Table exists but migration check failed, try to add column anyway
+                    try:
+                        print("Migration check failed, attempting to add column anyway...")
+                        with engine.connect() as conn:
+                            db_url = str(engine.url)
+                            is_postgresql = 'postgresql' in db_url or 'postgres' in db_url
+                            if is_postgresql:
+                                conn.execute(text("""
+                                    ALTER TABLE conversations 
+                                    ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE
+                                """))
+                            else:
+                                conn.execute(text("""
+                                    ALTER TABLE conversations 
+                                    ADD COLUMN is_deleted BOOLEAN DEFAULT 0
+                                """))
+                            conn.commit()
+                            print("[OK] Column added via fallback migration")
+                    except Exception as fallback_error:
+                        print(f"[INFO] Fallback migration also failed: {fallback_error}")
+                else:
+                    print(f"[INFO] Migration check: {migrate_error}")
             
     except Exception as e:
         print(f"ERROR in init_db: {e}")

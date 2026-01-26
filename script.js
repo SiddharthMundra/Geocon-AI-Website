@@ -4,6 +4,7 @@ const API_BASE_URL = window.location.origin + '/api';
 // Storage keys
 const STORAGE_KEY_USERS = 'geocon_ai_users';
 const STORAGE_KEY_CURRENT_USER = 'geocon_ai_current_user';
+const STORAGE_KEY_SESSION_TOKEN = 'geocon_ai_session_token';
 const STORAGE_KEY_SUBMISSIONS = 'geocon_ai_submissions';
 
 // Password no longer required - email-only login
@@ -339,6 +340,11 @@ async function handleLogin(e) {
             id: data.user.id
         };
         
+        // Save session token for persistent login
+        if (data.session_token) {
+            localStorage.setItem(STORAGE_KEY_SESSION_TOKEN, data.session_token);
+        }
+        
         // Save to localStorage for offline access
         localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(currentUser));
         
@@ -551,6 +557,9 @@ function handleLogout() {
         if (currentChatId) {
             localStorage.setItem(`current_chat_${currentUser.email}`, currentChatId);
         }
+        
+        // Clear session token
+        localStorage.removeItem(STORAGE_KEY_SESSION_TOKEN);
         
         // Clear current user
         currentUser = null;

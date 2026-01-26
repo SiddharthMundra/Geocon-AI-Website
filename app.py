@@ -3,12 +3,13 @@ from flask_cors import CORS
 from openai import AzureOpenAI
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import requests
 from urllib.parse import quote
 import base64
 import io
+import secrets
 from functools import wraps
 from database import db, init_db, User, Conversation, Message, Submission, AuditLog, Usage, get_or_create_user, update_user_last_login
 
@@ -1077,6 +1078,7 @@ def get_employee_conversations(user_id):
         
         # Only get non-deleted conversations (handle missing column gracefully)
         try:
+            # Try to query with is_deleted filter
             conversations = Conversation.query.filter_by(
                 user_id=user_id,
                 is_deleted=False
@@ -1084,9 +1086,15 @@ def get_employee_conversations(user_id):
         except Exception as e:
             # If is_deleted column doesn't exist yet, get all conversations
             print(f"Warning: is_deleted column not found, getting all conversations: {e}")
-            conversations = Conversation.query.filter_by(
-                user_id=user_id
-            ).order_by(Conversation.updated_at.desc()).all()
+            db.session.rollback()  # Rollback the failed transaction
+            try:
+                conversations = Conversation.query.filter_by(
+                    user_id=user_id
+                ).order_by(Conversation.updated_at.desc()).all()
+            except Exception as e2:
+                print(f"Error getting conversations: {e2}")
+                db.session.rollback()
+                conversations = []
         
         # Get submission stats for each conversation
         conversation_list = []
@@ -1170,6 +1178,12 @@ def login_user():
         user = get_or_create_user(email, name)
         update_user_last_login(user)
         
+        # Generate session token (valid for 30 days)
+        session_token = secrets.token_urlsafe(32)
+        user.session_token = session_token
+        user.session_expires = datetime.utcnow() + timedelta(days=30)
+        db.session.commit()
+        
         # Log successful login
         log_audit_event(
             action_type='login',
@@ -1183,7 +1197,8 @@ def login_user():
         
         return jsonify({
             'success': True,
-            'user': user.to_dict()
+            'user': user.to_dict(),
+            'session_token': session_token  # Return token for client to store
         })
     except Exception as e:
         print(f"Error in login: {e}")
@@ -1257,6 +1272,7 @@ def get_user_conversations(user_id):
         
         # Only get non-deleted conversations (handle missing column gracefully)
         try:
+            # Try to query with is_deleted filter
             conversations = Conversation.query.filter_by(
                 user_id=user_id, 
                 is_deleted=False
@@ -1264,9 +1280,15 @@ def get_user_conversations(user_id):
         except Exception as e:
             # If is_deleted column doesn't exist yet, get all conversations
             print(f"Warning: is_deleted column not found, getting all conversations: {e}")
-            conversations = Conversation.query.filter_by(
-                user_id=user_id
-            ).order_by(Conversation.updated_at.desc()).all()
+            db.session.rollback()  # Rollback the failed transaction
+            try:
+                conversations = Conversation.query.filter_by(
+                    user_id=user_id
+                ).order_by(Conversation.updated_at.desc()).all()
+            except Exception as e2:
+                print(f"Error getting conversations: {e2}")
+                db.session.rollback()
+                conversations = []
         return jsonify([conv.to_dict() for conv in conversations])
     except Exception as e:
         print(f"Error getting conversations: {e}")
@@ -1514,6 +1536,46 @@ def add_message(conversation_id):
     except Exception as e:
         print(f"Error adding message: {e}")
         db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/users/verify-session', methods=['POST'])
+def verify_session():
+    """Verify session token and return user info"""
+    try:
+        if not request.is_json:
+            return jsonify({'error': 'Content-Type must be application/json'}), 400
+        
+        data = request.json
+        session_token = data.get('session_token')
+        
+        if not session_token:
+            return jsonify({'error': 'session_token is required'}), 400
+        
+        # Find user by session token
+        user = User.query.filter_by(session_token=session_token).first()
+        
+        if not user:
+            return jsonify({'error': 'Invalid session token'}), 401
+        
+        # Check if token is expired
+        if user.session_expires and user.session_expires < datetime.utcnow():
+            # Clear expired token
+            user.session_token = None
+            user.session_expires = None
+            db.session.commit()
+            return jsonify({'error': 'Session expired'}), 401
+        
+        # Update last login
+        update_user_last_login(user)
+        
+        return jsonify({
+            'success': True,
+            'user': user.to_dict()
+        })
+    except Exception as e:
+        print(f"Error verifying session: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': 'Internal server error'}), 500

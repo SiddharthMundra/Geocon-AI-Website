@@ -44,8 +44,11 @@ function initializeAdmin() {
     });
     
     if (backBtn) {
-        backBtn.addEventListener('click', () => {
+        backBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             showEmployeesView();
+            return false;
         });
     }
     
@@ -56,8 +59,11 @@ function initializeAdmin() {
     }
     
     if (backFromAuditBtn) {
-        backFromAuditBtn.addEventListener('click', () => {
+        backFromAuditBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             showEmployeesView();
+            return false;
         });
     }
     
@@ -124,7 +130,7 @@ async function loadSubmissions() {
                     <h3>Access Denied</h3>
                     <p>You do not have permission to access the admin dashboard.</p>
                     <p>Only authorized administrators can view this page.</p>
-                    <a href="index.html" class="nav-link">← Back to Chat</a>
+                    <a href="index.html" class="nav-link" onclick="event.preventDefault(); window.location.href='index.html'; return false;">← Back to Chat</a>
                 </div>
             `;
             loading.classList.add('hidden');
@@ -527,7 +533,7 @@ async function loadEmployees() {
                     <h3>Access Denied</h3>
                     <p>You do not have permission to access the admin dashboard.</p>
                     <p>Only authorized administrators can view this page.</p>
-                    <a href="index.html" class="nav-link">← Back to Chat</a>
+                    <a href="index.html" class="nav-link" onclick="event.preventDefault(); window.location.href='index.html'; return false;">← Back to Chat</a>
                 </div>
             `;
             loading.classList.add('hidden');
@@ -701,11 +707,16 @@ async function loadEmployeeDetails(userId) {
 function showEmployeesView() {
     const employeesView = document.getElementById('employees-view');
     const detailsView = document.getElementById('employee-details-view');
+    const auditView = document.getElementById('audit-logs-view');
     
-    employeesView.classList.remove('hidden');
-    detailsView.classList.add('hidden');
+    if (employeesView) employeesView.classList.remove('hidden');
+    if (detailsView) detailsView.classList.add('hidden');
+    if (auditView) auditView.classList.add('hidden');
     currentView = 'employees';
     selectedEmployeeId = null;
+    
+    // Prevent any navigation
+    return false;
 }
 
 function escapeHtml(text) {
