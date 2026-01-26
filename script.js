@@ -61,6 +61,13 @@ function setupLoginListeners() {
 
 // Check authentication
 async function checkAuth() {
+    // Don't check auth if app is already shown (prevent race condition)
+    const appContainer = document.querySelector('.app-container');
+    if (appContainer && !appContainer.classList.contains('hidden')) {
+        console.log('App already shown, skipping checkAuth');
+        return;
+    }
+    
     // First try to verify session token (for persistent login)
     const sessionToken = localStorage.getItem(STORAGE_KEY_SESSION_TOKEN);
     if (sessionToken) {
@@ -176,30 +183,72 @@ function saveUsers(users) {
 
 // Show login modal
 function showLogin() {
-    document.getElementById('login-modal').classList.remove('hidden');
-    document.getElementById('name-modal').classList.add('hidden');
-    document.querySelector('.app-container').classList.add('hidden');
+    console.log('showLogin() called');
+    const loginModal = document.getElementById('login-modal');
+    const nameModal = document.getElementById('name-modal');
+    const appContainer = document.querySelector('.app-container');
+    
+    if (loginModal) loginModal.classList.remove('hidden');
+    if (nameModal) nameModal.classList.add('hidden');
+    if (appContainer) {
+        appContainer.classList.add('hidden');
+        appContainer.classList.remove('initialized');
+    }
+    console.log('Login modal shown, app hidden');
 }
 
 // Show name setup modal
 function showNameSetup() {
-    document.getElementById('login-modal').classList.add('hidden');
-    document.getElementById('name-modal').classList.remove('hidden');
-    document.querySelector('.app-container').classList.add('hidden');
+    console.log('showNameSetup() called');
+    const loginModal = document.getElementById('login-modal');
+    const nameModal = document.getElementById('name-modal');
+    const appContainer = document.querySelector('.app-container');
+    
+    if (loginModal) loginModal.classList.add('hidden');
+    if (nameModal) nameModal.classList.remove('hidden');
+    if (appContainer) {
+        appContainer.classList.add('hidden');
+        appContainer.classList.remove('initialized');
+    }
+    console.log('Name setup modal shown');
 }
 
-// Show app
+// Show app (updated version with better error handling)
 function showApp() {
-    document.getElementById('login-modal').classList.add('hidden');
-    document.getElementById('name-modal').classList.add('hidden');
-    document.querySelector('.app-container').classList.remove('hidden');
-    initializeApp();
+    console.log('showApp() called');
+    const loginModal = document.getElementById('login-modal');
+    const nameModal = document.getElementById('name-modal');
+    const appContainer = document.querySelector('.app-container');
+    
+    if (loginModal) loginModal.classList.add('hidden');
+    if (nameModal) nameModal.classList.add('hidden');
+    if (appContainer) {
+        appContainer.classList.remove('hidden');
+        // Initialize app only if not already initialized
+        if (!appContainer.classList.contains('initialized')) {
+            appContainer.classList.add('initialized');
+            initializeApp();
+        }
+    }
+    console.log('App shown, login modal hidden');
 }
 
 // Initialize app
 async function initializeApp() {
+    console.log('initializeApp() called for user:', currentUser?.email);
+    
+    // Ensure we have a current user
+    if (!currentUser) {
+        console.error('No current user, redirecting to login');
+        showLogin();
+        return;
+    }
+    
     // Display user info
-    document.getElementById('user-email-display').textContent = currentUser.email;
+    const userEmailDisplay = document.getElementById('user-email-display');
+    if (userEmailDisplay) {
+        userEmailDisplay.textContent = currentUser.email;
+    }
     
     // Show/hide admin dashboard based on email
     const adminLink = document.getElementById('admin-dashboard-link');
@@ -430,11 +479,27 @@ async function handleLogin(e) {
         // Check if user has name
         if (currentUser.name && currentUser.name.trim()) {
             console.log('User has name, showing app');
-            showApp();
+            // Clear any error messages
+            errorDiv.classList.add('hidden');
+            // Clear login form
+            const loginForm = document.getElementById('login-form');
+            if (loginForm) loginForm.reset();
+            // Show app immediately - use setTimeout to prevent race condition with checkAuth
+            setTimeout(() => {
+                showApp();
+            }, 100);
         } else {
             // First time login - need to set name
             console.log('First time login, showing name setup');
-            showNameSetup();
+            // Clear any error messages
+            errorDiv.classList.add('hidden');
+            // Clear login form
+            const loginForm = document.getElementById('login-form');
+            if (loginForm) loginForm.reset();
+            // Show name setup
+            setTimeout(() => {
+                showNameSetup();
+            }, 100);
         }
     } catch (error) {
         console.error('Login error:', error);
@@ -873,7 +938,6 @@ async function sendMessage() {
                     employeeName: currentUser.name,
                     prompt: prompt,
                     searchSharePoint: searchSharePoint,
-                    documentType: documentType || null
                     documentType: documentType || null
                 })
             };
