@@ -10,7 +10,7 @@ from urllib.parse import quote
 import base64
 import io
 from functools import wraps
-from database import db, init_db, User, Conversation, Message, Submission, AuditLog, get_or_create_user, update_user_last_login
+from database import db, init_db, User, Conversation, Message, Submission, AuditLog, Usage, get_or_create_user, update_user_last_login
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 # Configure CORS with security restrictions
@@ -68,24 +68,37 @@ app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Enhanced connection pooling for 20+ concurrent users
 # Configure database connection args
-connect_args = {
-    'connect_timeout': 10,  # Connection timeout in seconds
-    'application_name': 'geocon_ai_app'
-}
-
-# Add SSL mode for PostgreSQL (required on Render and most cloud providers)
+# Only add PostgreSQL-specific args if using PostgreSQL
 if DATABASE_URL and ('postgresql' in DATABASE_URL or 'postgres' in DATABASE_URL):
-    # Render and most cloud providers require SSL
-    connect_args['sslmode'] = 'require'
+    # PostgreSQL connection args
+    connect_args = {
+        'connect_timeout': 10,  # Connection timeout in seconds
+        'application_name': 'geocon_ai_app',
+        'sslmode': 'require'  # Render and most cloud providers require SSL
+    }
+    # PostgreSQL-specific pool settings
+    engine_options = {
+        'pool_pre_ping': True,  # Verify connections before using
+        'pool_recycle': 300,    # Recycle connections after 5 minutes
+        'pool_size': 20,        # Number of connections to maintain
+        'max_overflow': 10,     # Additional connections beyond pool_size
+        'pool_timeout': 30,     # Timeout for getting connection from pool
+        'connect_args': connect_args
+    }
+else:
+    # SQLite connection args (no connect_timeout or sslmode)
+    connect_args = {}
+    # SQLite-specific pool settings (smaller pool for local development)
+    engine_options = {
+        'pool_pre_ping': True,
+        'pool_recycle': 300,
+        'pool_size': 5,         # Smaller pool for SQLite
+        'max_overflow': 5,
+        'pool_timeout': 30,
+        'connect_args': connect_args
+    }
 
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_pre_ping': True,  # Verify connections before using
-    'pool_recycle': 300,    # Recycle connections after 5 minutes
-    'pool_size': 20,        # Number of connections to maintain
-    'max_overflow': 10,     # Additional connections beyond pool_size
-    'pool_timeout': 30,     # Timeout for getting connection from pool
-    'connect_args': connect_args
-}
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
 
 # Ensure no bind key is set (use default)
 # Remove SQLALCHEMY_BINDS if it exists to avoid bind key errors
@@ -158,9 +171,11 @@ def log_audit_event(action_type, action_category, description, user_id=None, use
     try:
         audit_log = AuditLog(
             timestamp=datetime.utcnow(),
-            user_id=user_id,
+            actor_user_id=user_id,  # Use actor_user_id (new field)
+            user_id=user_id,  # Keep for backward compatibility
             user_email=user_email,
-            action_type=action_type,
+            action=action_type,  # Use action (new field)
+            action_type=action_type,  # Keep for backward compatibility
             action_category=action_category,
             description=description,
             ip_address=get_client_ip(),
@@ -651,6 +666,13 @@ def call_azure_openai(prompt, sharepoint_context=None, file_contents=None):
         usage = response.usage if hasattr(response, 'usage') else None
         finish_reason = response.choices[0].finish_reason if hasattr(response.choices[0], 'finish_reason') else None
         
+        # Get client context from request
+        client_context = {
+            'user_agent': request.headers.get('User-Agent', 'Unknown'),
+            'ip_address': get_client_ip(),
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
         metadata = {
             'model': AZURE_OPENAI_DEPLOYMENT,
             'temperature': 0.7,
@@ -660,6 +682,7 @@ def call_azure_openai(prompt, sharepoint_context=None, file_contents=None):
             'total_tokens': usage.total_tokens if usage else None,
             'latency_ms': latency_ms,
             'finish_reason': finish_reason,
+            'client_context': client_context,
             'timestamp': datetime.utcnow().isoformat()
         }
         
@@ -1052,11 +1075,18 @@ def get_employee_conversations(user_id):
             metadata={'target_user_id': user_id, 'target_user_email': user.email}
         )
         
-        # Only get non-deleted conversations
-        conversations = Conversation.query.filter_by(
-            user_id=user_id,
-            is_deleted=False
-        ).order_by(Conversation.updated_at.desc()).all()
+        # Only get non-deleted conversations (handle missing column gracefully)
+        try:
+            conversations = Conversation.query.filter_by(
+                user_id=user_id,
+                is_deleted=False
+            ).order_by(Conversation.updated_at.desc()).all()
+        except Exception as e:
+            # If is_deleted column doesn't exist yet, get all conversations
+            print(f"Warning: is_deleted column not found, getting all conversations: {e}")
+            conversations = Conversation.query.filter_by(
+                user_id=user_id
+            ).order_by(Conversation.updated_at.desc()).all()
         
         # Get submission stats for each conversation
         conversation_list = []
@@ -1225,11 +1255,18 @@ def get_user_conversations(user_id):
         if not user:
             return jsonify({'error': 'User not found'}), 404
         
-        # Only get non-deleted conversations
-        conversations = Conversation.query.filter_by(
-            user_id=user_id, 
-            is_deleted=False
-        ).order_by(Conversation.updated_at.desc()).all()
+        # Only get non-deleted conversations (handle missing column gracefully)
+        try:
+            conversations = Conversation.query.filter_by(
+                user_id=user_id, 
+                is_deleted=False
+            ).order_by(Conversation.updated_at.desc()).all()
+        except Exception as e:
+            # If is_deleted column doesn't exist yet, get all conversations
+            print(f"Warning: is_deleted column not found, getting all conversations: {e}")
+            conversations = Conversation.query.filter_by(
+                user_id=user_id
+            ).order_by(Conversation.updated_at.desc()).all()
         return jsonify([conv.to_dict() for conv in conversations])
     except Exception as e:
         print(f"Error getting conversations: {e}")
@@ -1274,6 +1311,7 @@ def create_conversation():
         
         # Check if conversation already exists
         conversation = Conversation.query.get(conversation_id)
+        
         if conversation:
             # Verify ownership
             if conversation.user_id != user_id:
@@ -1281,16 +1319,29 @@ def create_conversation():
             # Update existing conversation (restore if was deleted)
             conversation.title = title[:500]  # Ensure length limit
             conversation.updated_at = datetime.utcnow()
-            if conversation.is_deleted:
-                conversation.is_deleted = False  # Restore if it was soft-deleted
+            # Only set is_deleted if column exists
+            try:
+                if hasattr(conversation, 'is_deleted') and conversation.is_deleted:
+                    conversation.is_deleted = False  # Restore if it was soft-deleted
+            except:
+                pass  # Column doesn't exist, skip
         else:
             # Create new conversation
-            conversation = Conversation(
-                id=conversation_id[:255],  # Ensure length limit
-                user_id=user_id,
-                title=title[:500],  # Ensure length limit
-                is_deleted=False  # Explicitly set to False for new conversations
-            )
+            # Try to create with is_deleted, fallback if column doesn't exist
+            try:
+                conversation = Conversation(
+                    id=conversation_id[:255],  # Ensure length limit
+                    user_id=user_id,
+                    title=title[:500],  # Ensure length limit
+                    is_deleted=False  # Explicitly set to False for new conversations
+                )
+            except Exception:
+                # If is_deleted column doesn't exist, create without it
+                conversation = Conversation(
+                    id=conversation_id[:255],
+                    user_id=user_id,
+                    title=title[:500]
+                )
             db.session.add(conversation)
         
         db.session.commit()
@@ -1329,7 +1380,7 @@ def delete_conversation(conversation_id):
         if conversation.user_id != user_id:
             return jsonify({'error': 'Unauthorized: You can only delete your own conversations'}), 403
         
-        # Soft delete
+        # Soft delete - always set is_deleted flag
         conversation.is_deleted = True
         conversation.updated_at = datetime.utcnow()
         db.session.commit()
@@ -1354,7 +1405,7 @@ def delete_conversation(conversation_id):
         return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/api/conversations/<conversation_id>/messages', methods=['POST'])
-def add_message():
+def add_message(conversation_id):
     """Add a message to a conversation"""
     try:
         if not request.is_json:
@@ -1364,7 +1415,8 @@ def add_message():
         if not data:
             return jsonify({'error': 'Request body is required'}), 400
         
-        conversation_id = data.get('conversation_id') or conversation_id
+        # Use conversation_id from URL, fallback to body if needed
+        conversation_id = conversation_id or data.get('conversation_id')
         role = data.get('role')  # 'user' or 'assistant'
         content = data.get('content')
         metadata = data.get('metadata', {})
@@ -1412,11 +1464,12 @@ def add_message():
             message_metadata=metadata if isinstance(metadata, dict) else {}  # Use message_metadata (metadata is reserved in SQLAlchemy)
         )
         db.session.add(message)
+        db.session.flush()  # Flush to get message.id without committing
         
         # Update conversation timestamp
         conversation.updated_at = datetime.utcnow()
         
-        # If this is an assistant message, create submission record
+        # If this is an assistant message, create submission and usage records
         if role == 'assistant':
             # Find the previous user message in this conversation
             user_msg = Message.query.filter_by(
@@ -1430,8 +1483,10 @@ def add_message():
                     id=submission_id,
                     user_id=conversation.user_id,
                     conversation_id=conversation_id[:255],
-                    prompt=user_msg.content[:50000],  # Limit prompt size
-                    response=content[:50000],  # Limit response size
+                    user_message_id=user_msg.id,  # Reference to user message
+                    assistant_message_id=message.id,  # Reference to assistant message (available after flush)
+                    prompt=user_msg.content[:50000],  # Limit prompt size (denormalized)
+                    response=content[:50000],  # Limit response size (denormalized)
                     status=metadata.get('confidentialStatus', 'safe')[:50] if isinstance(metadata, dict) else 'safe',
                     check_results=metadata.get('checkResults', []) if isinstance(metadata, dict) else [],
                     files_processed=metadata.get('filesCount', 0) if isinstance(metadata, dict) else 0,
@@ -1439,6 +1494,20 @@ def add_message():
                     sharepoint_results_count=metadata.get('sharepointResultsCount', 0) if isinstance(metadata, dict) else 0
                 )
                 db.session.add(submission)
+            
+            # Create Usage record for cost tracking
+            if isinstance(metadata, dict) and metadata.get('total_tokens'):
+                usage = Usage(
+                    user_id=conversation.user_id,
+                    conversation_id=conversation_id[:255],
+                    assistant_message_id=message.id,  # Available after flush
+                    model=metadata.get('model', AZURE_OPENAI_DEPLOYMENT),
+                    token_in=metadata.get('token_in'),
+                    token_out=metadata.get('token_out'),
+                    total_tokens=metadata.get('total_tokens'),
+                    latency_ms=metadata.get('latency_ms')
+                )
+                db.session.add(usage)
         
         db.session.commit()
         return jsonify(message.to_dict())

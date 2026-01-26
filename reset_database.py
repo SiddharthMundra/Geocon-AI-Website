@@ -5,7 +5,7 @@ USE WITH CAUTION - This will delete all data!
 """
 
 from app import app
-from database import db, User, Conversation, Message, Submission, AuditLog
+from database import db, User, Conversation, Message, Submission, AuditLog, Usage
 
 if __name__ == '__main__':
     print("="*60)
@@ -49,12 +49,15 @@ if __name__ == '__main__':
             print("Database reset complete!")
             print("="*60)
             print("\nAll data has been deleted and tables recreated with:")
-            print("  ✓ Conversations table with is_deleted (soft delete)")
-            print("  ✓ Messages table with created_at and message_metadata")
+            print("  ✓ Users table (id, email, name, created_at, last_login)")
+            print("  ✓ Conversations table (id, user_id, title, created_at, updated_at, is_deleted)")
+            print("  ✓ Messages table (id, conversation_id, role, content, created_at, message_metadata)")
+            print("  ✓ Submissions table (references messages, includes prompt/response for admin)")
+            print("  ✓ Usage table (token usage, latency, cost tracking)")
+            print("  ✓ Audit logs table (admin access, security events)")
             print("  ✓ Proper indexes and relationships")
-            print("  ✓ Audit logs table")
             print("\nYou can now start fresh with the application.")
-            print("All new conversations and messages will be stored in SQL.")
+            print("All conversations, messages, statistics, and metadata will be stored in SQL.")
             
     except Exception as e:
         print(f"\nERROR: {e}")

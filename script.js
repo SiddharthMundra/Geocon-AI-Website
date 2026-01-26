@@ -13,6 +13,7 @@ let currentUser = null;
 let currentChatId = null;
 let conversations = [];
 let selectedFiles = [];
+let isSendingMessage = false; // Prevent duplicate message submissions
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -196,50 +197,103 @@ function updateGreeting() {
     }
 }
 
+// Track if event listeners are already set up
+let eventListenersSetup = false;
+
 // Setup event listeners (for app functionality after login)
 function setupEventListeners() {
+    // Only set up once to prevent duplicate listeners
+    if (eventListenersSetup) {
+        return;
+    }
+    
     // Header logout button
-    document.getElementById('header-logout-btn').addEventListener('click', handleLogout);
+    const logoutBtn = document.getElementById('header-logout-btn');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', handleLogout);
+    }
     
     // Settings button
-    document.getElementById('settings-btn').addEventListener('click', showSettings);
+    const settingsBtn = document.getElementById('settings-btn');
+    if (settingsBtn) {
+        settingsBtn.addEventListener('click', showSettings);
+    }
     
     // Settings form
-    document.getElementById('settings-form').addEventListener('submit', handleSettingsSave);
-    document.getElementById('settings-cancel-btn').addEventListener('click', hideSettings);
+    const settingsForm = document.getElementById('settings-form');
+    if (settingsForm) {
+        settingsForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            handleSettingsSave(e);
+        });
+    }
+    const settingsCancelBtn = document.getElementById('settings-cancel-btn');
+    if (settingsCancelBtn) {
+        settingsCancelBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            hideSettings(e);
+        });
+    }
     
     // New chat button
-    document.getElementById('new-chat-btn').addEventListener('click', createNewChat);
+    const newChatBtn = document.getElementById('new-chat-btn');
+    if (newChatBtn) {
+        newChatBtn.addEventListener('click', createNewChat);
+    }
     
-    // Chat form submission
-    document.getElementById('chat-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        await sendMessage();
-    });
+    // Chat form submission - use named function to allow removal if needed
+    const chatForm = document.getElementById('chat-form');
+    if (chatForm) {
+        const handleChatSubmit = async (e) => {
+            e.preventDefault();
+            e.stopPropagation(); // Prevent event bubbling
+            await sendMessage();
+        };
+        chatForm.addEventListener('submit', handleChatSubmit);
+    }
     
     // File upload
-    document.getElementById('file-upload-btn').addEventListener('click', () => {
-        document.getElementById('file-upload').click();
-    });
+    const fileUploadBtn = document.getElementById('file-upload-btn');
+    if (fileUploadBtn) {
+        fileUploadBtn.addEventListener('click', () => {
+            document.getElementById('file-upload').click();
+        });
+    }
     
-    document.getElementById('file-upload').addEventListener('change', (e) => {
-        selectedFiles = Array.from(e.target.files);
-        renderFileList();
-    });
+    const fileUpload = document.getElementById('file-upload');
+    if (fileUpload) {
+        fileUpload.addEventListener('change', (e) => {
+            selectedFiles = Array.from(e.target.files);
+            renderFileList();
+        });
+    }
     
     // Enter key handling for chat input (Shift+Enter for new line)
-    document.getElementById('prompt-input').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            document.getElementById('chat-form').dispatchEvent(new Event('submit'));
-        }
-    });
+    const promptInput = document.getElementById('prompt-input');
+    if (promptInput) {
+        promptInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                e.stopPropagation(); // Prevent duplicate submissions
+                const chatForm = document.getElementById('chat-form');
+                if (chatForm) {
+                    chatForm.dispatchEvent(new Event('submit'));
+                }
+            }
+        });
+    }
     
     // Auto-resize textarea
-    document.getElementById('prompt-input').addEventListener('input', (e) => {
-        e.target.style.height = 'auto';
-        e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
-    });
+    if (promptInput) {
+        promptInput.addEventListener('input', (e) => {
+            e.target.style.height = 'auto';
+            e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+        });
+    }
+    
+    eventListenersSetup = true;
 }
 
 // Handle login
@@ -389,9 +443,16 @@ function hideSettings(e) {
         e.preventDefault();
         e.stopPropagation();
     }
-    document.getElementById('settings-modal').classList.add('hidden');
-    document.getElementById('settings-error').classList.add('hidden');
+    const settingsModal = document.getElementById('settings-modal');
+    if (settingsModal) {
+        settingsModal.classList.add('hidden');
+    }
+    const errorDiv = document.getElementById('settings-error');
+    if (errorDiv) {
+        errorDiv.classList.add('hidden');
+    }
     // Don't navigate anywhere - just hide the modal
+    return false; // Prevent any default behavior
 }
 
 // Handle settings save
@@ -593,6 +654,12 @@ async function loadChat(chatId) {
 
 // Send message
 async function sendMessage() {
+    // Prevent duplicate submissions
+    if (isSendingMessage) {
+        console.log('Message already being sent, ignoring duplicate request');
+        return;
+    }
+    
     const promptInput = document.getElementById('prompt-input');
     const prompt = promptInput.value.trim();
     const searchSharePoint = document.getElementById('search-sharepoint').checked;
@@ -601,6 +668,9 @@ async function sendMessage() {
     const sendLoader = document.getElementById('send-loader');
     
     if (!prompt) return;
+    
+    // Set flag to prevent duplicate submissions
+    isSendingMessage = true;
     
     // Create new chat if needed
     if (!currentChatId) {
@@ -784,6 +854,9 @@ async function sendMessage() {
         // Replace loading message with error message
         appendMessage('ai', `Error: ${error.message}`, { error: true }, loadingId);
     } finally {
+        // Reset flag to allow new submissions
+        isSendingMessage = false;
+        
         sendBtn.disabled = false;
         sendIcon.classList.remove('hidden');
         sendLoader.classList.add('hidden');
