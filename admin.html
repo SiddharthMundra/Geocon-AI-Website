@@ -76,6 +76,9 @@
                     <button id="refresh-btn" class="btn btn-secondary">
                         Refresh
                     </button>
+                    <button id="audit-logs-btn" class="btn btn-secondary">
+                        View Audit Logs
+                    </button>
                     <button id="export-btn" class="btn btn-secondary">
                         Export JSON
                     </button>
@@ -112,6 +115,47 @@
             <!-- Legacy submissions view (hidden by default, kept for compatibility) -->
             <div id="submissions-container" class="submissions-container hidden">
                 <!-- Submissions will be loaded here -->
+            </div>
+
+            <!-- Audit Logs View -->
+            <div id="audit-logs-view" class="audit-logs-view hidden">
+                <div class="audit-logs-header">
+                    <h2 class="section-title">Audit Logs</h2>
+                    <div class="audit-logs-controls">
+                        <select id="audit-action-type-filter" class="filter-select">
+                            <option value="all">All Actions</option>
+                            <option value="login">Login</option>
+                            <option value="logout">Logout</option>
+                            <option value="admin_access">Admin Access</option>
+                            <option value="admin_data_access">Admin Data Access</option>
+                            <option value="ai_interaction">AI Interaction</option>
+                            <option value="file_upload">File Upload</option>
+                            <option value="update_name">Name Update</option>
+                            <option value="unauthorized_admin_access">Unauthorized Access</option>
+                        </select>
+                        <select id="audit-category-filter" class="filter-select">
+                            <option value="all">All Categories</option>
+                            <option value="authentication">Authentication</option>
+                            <option value="admin">Admin</option>
+                            <option value="data">Data</option>
+                            <option value="security">Security</option>
+                            <option value="system">System</option>
+                        </select>
+                        <select id="audit-status-filter" class="filter-select">
+                            <option value="all">All Status</option>
+                            <option value="success">Success</option>
+                            <option value="failure">Failure</option>
+                            <option value="error">Error</option>
+                            <option value="unauthorized">Unauthorized</option>
+                        </select>
+                        <input type="text" id="audit-user-email-filter" class="filter-input" placeholder="Filter by email...">
+                        <button id="audit-refresh-btn" class="btn btn-secondary">Refresh</button>
+                        <button id="back-to-employees-from-audit-btn" class="btn btn-secondary">← Back to Employees</button>
+                    </div>
+                </div>
+                <div id="audit-logs-container" class="audit-logs-container">
+                    <!-- Audit logs will be loaded here -->
+                </div>
             </div>
         </div>
     </div>

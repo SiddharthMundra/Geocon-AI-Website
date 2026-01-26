@@ -7,7 +7,8 @@ let allSubmissions = [];
 let filteredSubmissions = [];
 let employees = [];
 let selectedEmployeeId = null;
-let currentView = 'employees'; // 'employees' or 'details'
+let currentView = 'employees'; // 'employees', 'details', or 'audit'
+let auditLogs = [];
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -20,12 +21,17 @@ function initializeAdmin() {
     const exportBtn = document.getElementById('export-btn');
     const clearBtn = document.getElementById('clear-btn');
     const backBtn = document.getElementById('back-to-employees-btn');
+    const auditLogsBtn = document.getElementById('audit-logs-btn');
+    const auditRefreshBtn = document.getElementById('audit-refresh-btn');
+    const backFromAuditBtn = document.getElementById('back-to-employees-from-audit-btn');
     
     refreshBtn.addEventListener('click', () => {
         if (currentView === 'employees') {
             loadEmployees();
-        } else {
+        } else if (currentView === 'details') {
             loadEmployeeDetails(selectedEmployeeId);
+        } else if (currentView === 'audit') {
+            loadAuditLogs();
         }
     });
     
@@ -42,6 +48,57 @@ function initializeAdmin() {
             showEmployeesView();
         });
     }
+    
+    if (auditRefreshBtn) {
+        auditRefreshBtn.addEventListener('click', () => {
+            loadAuditLogs();
+        });
+    }
+    
+    if (backFromAuditBtn) {
+        backFromAuditBtn.addEventListener('click', () => {
+            showEmployeesView();
+        });
+    }
+    
+    // Audit logs button
+    const auditLogsBtn = document.getElementById('audit-logs-btn');
+    if (auditLogsBtn) {
+        auditLogsBtn.addEventListener('click', () => {
+            loadAuditLogs();
+        });
+    }
+    
+    // Audit log filters
+    const auditActionFilter = document.getElementById('audit-action-type-filter');
+    const auditCategoryFilter = document.getElementById('audit-category-filter');
+    const auditStatusFilter = document.getElementById('audit-status-filter');
+    const auditEmailFilter = document.getElementById('audit-user-email-filter');
+    
+    if (auditActionFilter) {
+        auditActionFilter.addEventListener('change', loadAuditLogs);
+    }
+    if (auditCategoryFilter) {
+        auditCategoryFilter.addEventListener('change', loadAuditLogs);
+    }
+    if (auditStatusFilter) {
+        auditStatusFilter.addEventListener('change', loadAuditLogs);
+    }
+    if (auditEmailFilter) {
+        auditEmailFilter.addEventListener('input', debounce(loadAuditLogs, 500));
+    }
+}
+
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
 }
 
 async function loadSubmissions() {
@@ -52,11 +109,26 @@ async function loadSubmissions() {
     loading.classList.remove('hidden');
     
     try {
-        // Fetch stats from database API
-        const statsResponse = await fetch(`${window.location.origin}/api/admin/stats`);
+        // Get current user email from localStorage for admin auth
+        const currentUser = JSON.parse(localStorage.getItem('geocon_ai_current_user') || '{}');
+        const userEmail = currentUser.email || '';
+        
+        // Fetch stats from database API with admin auth
+        const statsResponse = await fetch(`${window.location.origin}/api/admin/stats?email=${encodeURIComponent(userEmail)}`);
         if (statsResponse.ok) {
             const stats = await statsResponse.json();
             updateStatsFromAPI(stats);
+        } else if (statsResponse.status === 403) {
+            container.innerHTML = `
+                <div class="error-message">
+                    <h3>Access Denied</h3>
+                    <p>You do not have permission to access the admin dashboard.</p>
+                    <p>Only authorized administrators can view this page.</p>
+                    <a href="index.html" class="nav-link">← Back to Chat</a>
+                </div>
+            `;
+            loading.classList.add('hidden');
+            return;
         }
         
         // Fetch submissions from database API
@@ -443,15 +515,34 @@ async function loadEmployees() {
     currentView = 'employees';
     
     try {
-        // Fetch stats from database API
-        const statsResponse = await fetch(`${window.location.origin}/api/admin/stats`);
+        // Get current user email from localStorage for admin auth
+        const currentUser = JSON.parse(localStorage.getItem('geocon_ai_current_user') || '{}');
+        const userEmail = currentUser.email || '';
+        
+        // Check if user is admin
+        const adminEmails = ['carter@geoconinc.com', 'mundra@geoconinc.com'];
+        if (!adminEmails.includes(userEmail.toLowerCase())) {
+            employeesList.innerHTML = `
+                <div class="error-message">
+                    <h3>Access Denied</h3>
+                    <p>You do not have permission to access the admin dashboard.</p>
+                    <p>Only authorized administrators can view this page.</p>
+                    <a href="index.html" class="nav-link">← Back to Chat</a>
+                </div>
+            `;
+            loading.classList.add('hidden');
+            return;
+        }
+        
+        // Fetch stats from database API with admin auth
+        const statsResponse = await fetch(`${window.location.origin}/api/admin/stats?email=${encodeURIComponent(userEmail)}`);
         if (statsResponse.ok) {
             const stats = await statsResponse.json();
             updateStatsFromAPI(stats);
         }
         
-        // Fetch employees from database API
-        const employeesResponse = await fetch(`${window.location.origin}/api/admin/employees`);
+        // Fetch employees from database API with admin auth
+        const employeesResponse = await fetch(`${window.location.origin}/api/admin/employees?email=${encodeURIComponent(userEmail)}`);
         if (employeesResponse.ok) {
             employees = await employeesResponse.json();
             console.log(`Loaded ${employees.length} employees from database`);
@@ -545,7 +636,11 @@ async function loadEmployeeDetails(userId) {
     detailsView.classList.remove('hidden');
     
     try {
-        const response = await fetch(`${window.location.origin}/api/admin/employees/${userId}/conversations`);
+        // Get current user email from localStorage for admin auth
+        const currentUser = JSON.parse(localStorage.getItem('geocon_ai_current_user') || '{}');
+        const userEmail = currentUser.email || '';
+        
+        const response = await fetch(`${window.location.origin}/api/admin/employees/${userId}/conversations?email=${encodeURIComponent(userEmail)}`);
         if (!response.ok) {
             throw new Error('Failed to load employee conversations');
         }
@@ -618,4 +713,132 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// Load audit logs
+async function loadAuditLogs() {
+    const container = document.getElementById('audit-logs-container');
+    const loading = document.getElementById('loading');
+    
+    if (!container) return;
+    
+    container.innerHTML = '';
+    loading.classList.remove('hidden');
+    currentView = 'audit';
+    
+    // Show audit logs view, hide others
+    document.getElementById('employees-view').classList.add('hidden');
+    document.getElementById('employee-details-view').classList.add('hidden');
+    document.getElementById('audit-logs-view').classList.remove('hidden');
+    
+    try {
+        // Get current user email from localStorage for admin auth
+        const currentUser = JSON.parse(localStorage.getItem('geocon_ai_current_user') || '{}');
+        const userEmail = currentUser.email || '';
+        
+        // Get filter values
+        const actionType = document.getElementById('audit-action-type-filter')?.value || 'all';
+        const category = document.getElementById('audit-category-filter')?.value || 'all';
+        const status = document.getElementById('audit-status-filter')?.value || 'all';
+        const emailFilter = document.getElementById('audit-user-email-filter')?.value || '';
+        
+        // Build query string
+        const params = new URLSearchParams({
+            email: userEmail,
+            limit: '200',
+            offset: '0'
+        });
+        if (actionType !== 'all') params.append('action_type', actionType);
+        if (category !== 'all') params.append('category', category);
+        if (status !== 'all') params.append('status', status);
+        if (emailFilter) params.append('user_email', emailFilter);
+        
+        const response = await fetch(`${window.location.origin}/api/admin/audit-logs?${params}`);
+        
+        if (!response.ok) {
+            if (response.status === 403) {
+                container.innerHTML = `
+                    <div class="error-message">
+                        <h3>Access Denied</h3>
+                        <p>You do not have permission to view audit logs.</p>
+                    </div>
+                `;
+                loading.classList.add('hidden');
+                return;
+            }
+            throw new Error('Failed to load audit logs');
+        }
+        
+        const data = await response.json();
+        auditLogs = data.logs || [];
+        
+        displayAuditLogs(auditLogs, data.total || 0);
+        
+    } catch (error) {
+        console.error('Error loading audit logs:', error);
+        container.innerHTML = `
+            <div class="error-message">
+                <h3>Error Loading Audit Logs</h3>
+                <p>${error.message}</p>
+            </div>
+        `;
+    } finally {
+        loading.classList.add('hidden');
+    }
+}
+
+// Display audit logs
+function displayAuditLogs(logs, total) {
+    const container = document.getElementById('audit-logs-container');
+    
+    if (logs.length === 0) {
+        container.innerHTML = '<div class="empty-state">No audit logs found</div>';
+        return;
+    }
+    
+    let html = `<div class="audit-logs-summary">Total: ${total} logs</div>`;
+    html += '<div class="audit-logs-table">';
+    html += '<table class="audit-table">';
+    html += '<thead><tr>';
+    html += '<th>Timestamp</th>';
+    html += '<th>User</th>';
+    html += '<th>Action</th>';
+    html += '<th>Category</th>';
+    html += '<th>Description</th>';
+    html += '<th>Status</th>';
+    html += '<th>IP Address</th>';
+    html += '</tr></thead>';
+    html += '<tbody>';
+    
+    logs.forEach(log => {
+        const statusClass = log.status === 'success' ? 'success' : 
+                           log.status === 'failure' ? 'failure' : 
+                           log.status === 'unauthorized' ? 'unauthorized' : 'error';
+        
+        html += `<tr class="audit-log-row ${statusClass}">`;
+        html += `<td>${escapeHtml(log.date || log.timestamp || 'N/A')}</td>`;
+        html += `<td>${escapeHtml(log.user_email || log.user_name || 'N/A')}</td>`;
+        html += `<td><span class="audit-action-type">${escapeHtml(log.action_type || 'N/A')}</span></td>`;
+        html += `<td><span class="audit-category">${escapeHtml(log.action_category || 'N/A')}</span></td>`;
+        html += `<td>${escapeHtml(log.description || 'N/A')}</td>`;
+        html += `<td><span class="audit-status ${statusClass}">${escapeHtml(log.status || 'N/A')}</span></td>`;
+        html += `<td>${escapeHtml(log.ip_address || 'N/A')}</td>`;
+        html += '</tr>';
+    });
+    
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+}
+
+// Show employees view
+function showEmployeesView() {
+    const employeesView = document.getElementById('employees-view');
+    const detailsView = document.getElementById('employee-details-view');
+    const auditView = document.getElementById('audit-logs-view');
+    
+    employeesView.classList.remove('hidden');
+    detailsView.classList.add('hidden');
+    if (auditView) auditView.classList.add('hidden');
+    currentView = 'employees';
+    selectedEmployeeId = null;
 }

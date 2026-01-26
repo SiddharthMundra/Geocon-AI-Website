@@ -112,6 +112,46 @@ class Submission(db.Model):
             'conversationId': self.conversation_id
         }
 
+# Audit Log Model
+class AuditLog(db.Model):
+    __tablename__ = 'audit_logs'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
+    user_email = db.Column(db.String(255), nullable=True, index=True)  # Store email even if user deleted
+    action_type = db.Column(db.String(100), nullable=False, index=True)  # 'login', 'logout', 'admin_access', 'data_access', etc.
+    action_category = db.Column(db.String(50), nullable=False, index=True)  # 'authentication', 'admin', 'data', 'security', 'system'
+    description = db.Column(db.Text, nullable=False)
+    ip_address = db.Column(db.String(45), nullable=True)  # IPv6 can be up to 45 chars
+    user_agent = db.Column(db.String(500), nullable=True)
+    request_method = db.Column(db.String(10), nullable=True)  # GET, POST, etc.
+    request_path = db.Column(db.String(500), nullable=True)
+    status = db.Column(db.String(50), nullable=True, index=True)  # 'success', 'failure', 'error', 'unauthorized'
+    metadata = db.Column(db.JSON)  # Additional context data
+    
+    # Relationships
+    user = db.relationship('User', backref='audit_logs', lazy=True)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+            'date': self.timestamp.strftime('%Y-%m-%d %H:%M:%S') if self.timestamp else None,
+            'user_id': self.user_id,
+            'user_email': self.user_email,
+            'user_name': self.user.name if self.user else None,
+            'action_type': self.action_type,
+            'action_category': self.action_category,
+            'description': self.description,
+            'ip_address': self.ip_address,
+            'user_agent': self.user_agent,
+            'request_method': self.request_method,
+            'request_path': self.request_path,
+            'status': self.status,
+            'metadata': self.metadata or {}
+        }
+
 # Helper functions
 def init_db(app):
     """Initialize database with Flask app"""

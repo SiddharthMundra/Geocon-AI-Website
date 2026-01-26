@@ -9,17 +9,27 @@ import requests
 from urllib.parse import quote
 import base64
 import io
-from database import db, init_db, User, Conversation, Message, Submission, get_or_create_user, update_user_last_login
+from functools import wraps
+from database import db, init_db, User, Conversation, Message, Submission, AuditLog, get_or_create_user, update_user_last_login
 
 app = Flask(__name__, static_folder='.', static_url_path='')
-CORS(app)  # Enable CORS for frontend requests
+# Configure CORS with security restrictions
+CORS(app, resources={
+    r"/api/*": {
+        "origins": os.getenv('ALLOWED_ORIGINS', '*').split(','),
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "max_age": 3600
+    }
+})
 
 # Database configuration
-# Use DATABASE_URL from environment, or use the provided Render database URL
+# Use DATABASE_URL from environment variable (NEVER hardcode credentials)
 DATABASE_URL = os.getenv('DATABASE_URL')
 if not DATABASE_URL or DATABASE_URL.strip() == '':
-    # Default to the Render PostgreSQL database URL
-    DATABASE_URL = "postgresql://test_aiwebsite_sql_user:x7FrVTKtQCs1C8kdOdWsAadnpChkX1bP@dpg-d5nccmje5dus73f2rcs0-a.oregon-postgres.render.com/test_aiwebsite_sql"
+    print("ERROR: DATABASE_URL environment variable is not set!")
+    print("Please set DATABASE_URL in your environment or Render dashboard.")
+    DATABASE_URL = None
 
 # Render PostgreSQL URLs sometimes need sslmode
 if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
@@ -50,9 +60,17 @@ print(f"Database URL configured: {DATABASE_URL[:50]}...")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# Enhanced connection pooling for 20+ concurrent users
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_pre_ping': True,  # Verify connections before using
     'pool_recycle': 300,    # Recycle connections after 5 minutes
+    'pool_size': 20,        # Number of connections to maintain
+    'max_overflow': 10,     # Additional connections beyond pool_size
+    'pool_timeout': 30,     # Timeout for getting connection from pool
+    'connect_args': {
+        'connect_timeout': 10,  # Connection timeout in seconds
+        'application_name': 'geocon_ai_app'
+    }
 }
 
 # Ensure no bind key is set (use default)
@@ -72,8 +90,9 @@ except Exception as e:
     print("The app will continue but database features may not work.")
 
 # Azure OpenAI Configuration
-AZURE_OPENAI_ENDPOINT = os.getenv('AZURE_OPENAI_ENDPOINT', 'https://openai-aiwebsite.cognitiveservices.azure.com/')
-AZURE_OPENAI_KEY = os.getenv('AZURE_OPENAI_KEY', '33xQjIc1c9OsaYY1WkOe4TVh8plFjBkYaXTbsD30uJ283hLnfqdwJQQJ99BLAC4f1cMXJ3w3AAAAACOGwcit')
+# All credentials must come from environment variables (NEVER hardcode)
+AZURE_OPENAI_ENDPOINT = os.getenv('AZURE_OPENAI_ENDPOINT')
+AZURE_OPENAI_KEY = os.getenv('AZURE_OPENAI_KEY')
 AZURE_OPENAI_DEPLOYMENT = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-4.1')
 AZURE_API_VERSION = os.getenv('AZURE_API_VERSION', '2024-12-01-preview')
 
@@ -88,6 +107,111 @@ SHAREPOINT_USE_GRAPH_API = os.getenv('SHAREPOINT_USE_GRAPH_API', 'true').lower()
 # Only uses: GET requests, Sites.Read.All, Files.Read.All, Sites.Search.All permissions
 
 DATA_FILE = 'submissions.json'
+
+# Security: File upload limits
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB per file
+MAX_FILES = 5  # Maximum number of files per request
+ALLOWED_EXTENSIONS = {'.txt', '.pdf', '.doc', '.docx', '.csv', '.md', '.json', 
+                     '.py', '.js', '.html', '.css', '.xlsx', '.xls', '.pptx', '.ppt'}
+
+# Admin email list - only these users can access admin endpoints
+ADMIN_EMAILS = ['carter@geoconinc.com', 'mundra@geoconinc.com']
+
+# Audit Logging Functions
+def get_client_ip():
+    """Get client IP address from request"""
+    if request.headers.get('X-Forwarded-For'):
+        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    elif request.headers.get('X-Real-IP'):
+        return request.headers.get('X-Real-IP')
+    else:
+        return request.remote_addr or 'unknown'
+
+def log_audit_event(action_type, action_category, description, user_id=None, user_email=None, 
+                   status='success', metadata=None):
+    """
+    Log an audit event to the database
+    
+    Args:
+        action_type: Type of action (e.g., 'login', 'logout', 'admin_access', 'data_access')
+        action_category: Category of action ('authentication', 'admin', 'data', 'security', 'system')
+        description: Human-readable description
+        user_id: User ID (optional)
+        user_email: User email (optional, but recommended)
+        status: 'success', 'failure', 'error', 'unauthorized'
+        metadata: Additional context (dict)
+    """
+    try:
+        audit_log = AuditLog(
+            timestamp=datetime.utcnow(),
+            user_id=user_id,
+            user_email=user_email,
+            action_type=action_type,
+            action_category=action_category,
+            description=description,
+            ip_address=get_client_ip(),
+            user_agent=request.headers.get('User-Agent', '')[:500],
+            request_method=request.method,
+            request_path=request.path[:500],
+            status=status,
+            metadata=metadata or {}
+        )
+        db.session.add(audit_log)
+        db.session.commit()
+    except Exception as e:
+        # Don't fail the request if audit logging fails
+        print(f"ERROR: Failed to log audit event: {e}")
+        db.session.rollback()
+        # Try to log to console as fallback
+        print(f"AUDIT: {action_type} | {action_category} | {user_email} | {description} | {status}")
+
+def require_admin(f):
+    """Decorator to require admin access for admin endpoints"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Get user email from request (either from JSON body or query params)
+        user_email = None
+        
+        # Try to get from JSON body
+        if request.is_json and request.json:
+            user_email = request.json.get('email', '').strip().lower()
+        
+        # Try to get from query params
+        if not user_email:
+            user_email = request.args.get('email', '').strip().lower()
+        
+        # Try to get from headers (for API calls)
+        if not user_email:
+            user_email = request.headers.get('X-User-Email', '').strip().lower()
+        
+        # Validate admin access
+        if not user_email or user_email not in [email.lower() for email in ADMIN_EMAILS]:
+            # Log unauthorized access attempt
+            log_audit_event(
+                action_type='unauthorized_admin_access',
+                action_category='security',
+                description=f'Unauthorized attempt to access admin endpoint: {request.path}',
+                user_email=user_email or 'unknown',
+                status='unauthorized',
+                metadata={'endpoint': request.path, 'method': request.method}
+            )
+            return jsonify({
+                'error': 'Unauthorized: Admin access required',
+                'message': 'Only authorized administrators can access this endpoint.'
+            }), 403
+        
+        # Log successful admin access
+        log_audit_event(
+            action_type='admin_access',
+            action_category='admin',
+            description=f'Admin accessed endpoint: {request.path}',
+            user_email=user_email,
+            status='success',
+            metadata={'endpoint': request.path, 'method': request.method}
+        )
+        
+        return f(*args, **kwargs)
+    return decorated_function
 
 # Initialize Azure OpenAI client
 if not AZURE_OPENAI_ENDPOINT or not AZURE_OPENAI_KEY:
@@ -338,9 +462,40 @@ def build_prompt_with_sharepoint_context(user_prompt, sharepoint_results):
     return context_section
 
 
+def validate_file(file):
+    """Validate uploaded file (size and extension)"""
+    if not file or not file.filename:
+        return False, "No file provided"
+    
+    filename = file.filename
+    file_ext = os.path.splitext(filename)[1].lower()
+    
+    # Check extension
+    if file_ext not in ALLOWED_EXTENSIONS:
+        return False, f"File type {file_ext} not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
+    
+    # Check file size
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)  # Reset file pointer
+    
+    if file_size > MAX_FILE_SIZE:
+        return False, f"File size ({file_size / 1024 / 1024:.2f} MB) exceeds maximum ({MAX_FILE_SIZE / 1024 / 1024} MB)"
+    
+    if file_size == 0:
+        return False, "File is empty"
+    
+    return True, None
+
 def extract_file_content(file):
     """Extract text content from uploaded file"""
     filename = file.filename
+    
+    # Validate file first
+    is_valid, error_msg = validate_file(file)
+    if not is_valid:
+        return f"[Error: {error_msg}]"
+    
     file_ext = os.path.splitext(filename)[1].lower()
     
     try:
@@ -427,9 +582,12 @@ def build_prompt_with_files(user_prompt, file_contents):
 
 
 def call_azure_openai(prompt, sharepoint_context=None, file_contents=None):
-    """Call Azure OpenAI API to get response"""
+    """Call Azure OpenAI API to get response with timeout"""
     if not client:
         raise Exception("Azure OpenAI client not configured. Please set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY.")
+    
+    if not AZURE_OPENAI_ENDPOINT or not AZURE_OPENAI_KEY:
+        raise Exception("Azure OpenAI credentials not configured. Please set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY environment variables.")
     
     try:
         # Build prompt with file content if provided
@@ -439,6 +597,10 @@ def call_azure_openai(prompt, sharepoint_context=None, file_contents=None):
         # Build prompt with SharePoint context if provided
         final_prompt = build_prompt_with_sharepoint_context(prompt, sharepoint_context) if sharepoint_context else prompt
         
+        # Validate final prompt length
+        if len(final_prompt) > 200000:  # ~200KB max
+            raise Exception("Total prompt size exceeds maximum allowed size")
+        
         print(f"  Deployment: {AZURE_OPENAI_DEPLOYMENT}")
         print(f"  Max completion tokens: 2000")  # Increased for longer responses with context
         print(f"  Temperature: 0.7")
@@ -447,6 +609,9 @@ def call_azure_openai(prompt, sharepoint_context=None, file_contents=None):
         if file_contents:
             print(f"  File content: {len(file_contents)} files")
         
+        # Call with timeout (Azure OpenAI SDK handles timeouts internally)
+        import signal
+        
         response = client.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT,
             messages=[
@@ -454,10 +619,17 @@ def call_azure_openai(prompt, sharepoint_context=None, file_contents=None):
                 {"role": "user", "content": final_prompt}
             ],
             max_completion_tokens=2000,  # Increased for longer responses
-            temperature=0.7
+            temperature=0.7,
+            timeout=60.0  # 60 second timeout
         )
         
+        if not response or not response.choices or len(response.choices) == 0:
+            raise Exception("Empty response from Azure OpenAI")
+        
         result = response.choices[0].message.content.strip()
+        if not result:
+            raise Exception("Empty content in response")
+        
         print(f"  API call successful")
         return result
     except Exception as e:
@@ -484,6 +656,8 @@ def submit_prompt():
         if request.is_json:
             # JSON request (no files)
             data = request.json
+            if not data:
+                return jsonify({'error': 'Request body is required'}), 400
             employee_name = data.get('employeeName', '').strip() if data else ''
             prompt = data.get('prompt', '').strip() if data else ''
             search_sharepoint = data.get('searchSharePoint', False)
@@ -501,21 +675,68 @@ def submit_prompt():
         print(f"Search SharePoint: {search_sharepoint}")
         print(f"Files uploaded: {len(files)}")
         
+        # Input validation
         if not employee_name or not prompt:
             error_msg = 'Employee name and prompt are required'
             print(f"ERROR: {error_msg}")
             return jsonify({'error': error_msg}), 400
         
-        # Process uploaded files
+        # Validate input lengths to prevent DoS
+        if len(prompt) > 50000:  # 50KB max prompt
+            error_msg = 'Prompt is too long (maximum 50,000 characters)'
+            print(f"ERROR: {error_msg}")
+            return jsonify({'error': error_msg}), 400
+        
+        if len(employee_name) > 255:
+            error_msg = 'Employee name is too long (maximum 255 characters)'
+            print(f"ERROR: {error_msg}")
+            return jsonify({'error': error_msg}), 400
+        
+        # Process uploaded files with validation
         file_contents = []
         if files:
+            if len(files) > MAX_FILES:
+                error_msg = f'Maximum {MAX_FILES} files allowed per request'
+                print(f"ERROR: {error_msg}")
+                # Log file upload violation
+                log_audit_event(
+                    action_type='file_upload_violation',
+                    action_category='security',
+                    description=f'File upload limit exceeded: {len(files)} files (max: {MAX_FILES})',
+                    user_email=employee_name if '@' in employee_name else f"{employee_name}@geoconinc.com",
+                    status='failure',
+                    metadata={'files_count': len(files), 'max_allowed': MAX_FILES}
+                )
+                return jsonify({'error': error_msg}), 400
+            
             print("Processing uploaded files...")
             for file in files:
                 if file.filename:
                     print(f"  Processing file: {file.filename}")
                     content = extract_file_content(file)
+                    if content.startswith("[Error:"):
+                        # File validation failed
+                        log_audit_event(
+                            action_type='file_upload_error',
+                            action_category='security',
+                            description=f'File validation failed: {file.filename} - {content}',
+                            user_email=employee_name if '@' in employee_name else f"{employee_name}@geoconinc.com",
+                            status='failure',
+                            metadata={'filename': file.filename, 'error': content}
+                        )
+                        return jsonify({'error': content}), 400
                     file_contents.append((file.filename, content))
                     print(f"  Extracted {len(content)} characters from {file.filename}")
+            
+            # Log successful file upload
+            log_audit_event(
+                action_type='file_upload',
+                action_category='data',
+                description=f'Files uploaded: {len(file_contents)} file(s)',
+                user_email=employee_name if '@' in employee_name else f"{employee_name}@geoconinc.com",
+                status='success',
+                metadata={'files_count': len(file_contents), 'filenames': [f[0] for f in file_contents]}
+            )
         
         # Check for confidential information (in prompt and file contents)
         print("Checking for confidential information...")
@@ -594,6 +815,24 @@ def submit_prompt():
             db.session.add(submission)
             db.session.commit()
             print(f"Submission saved to database with ID: {submission_id}")
+            
+            # Log AI interaction
+            log_audit_event(
+                action_type='ai_interaction',
+                action_category='data',
+                description=f'AI interaction completed - Status: {status}, Files: {len(file_contents)}, SharePoint: {search_sharepoint}',
+                user_id=user.id,
+                user_email=employee_email,
+                status='success',
+                metadata={
+                    'submission_id': submission_id,
+                    'confidential_status': status,
+                    'files_processed': len(file_contents) if file_contents else 0,
+                    'sharepoint_searched': search_sharepoint,
+                    'prompt_length': len(prompt),
+                    'response_length': len(chatgpt_response)
+                }
+            )
         except Exception as db_error:
             print(f"WARNING: Failed to save to database: {db_error}")
             # Continue even if database save fails
@@ -655,8 +894,9 @@ def get_submissions():
         return jsonify({'error': f'Failed to load submissions: {str(e)}'}), 500
 
 @app.route('/api/admin/stats', methods=['GET'])
+@require_admin
 def get_admin_stats():
-    """Get statistics for admin dashboard"""
+    """Get statistics for admin dashboard - Admin only"""
     try:
         total = Submission.query.count()
         flagged = Submission.query.filter(Submission.status != 'safe').count()
@@ -674,11 +914,14 @@ def get_admin_stats():
         })
     except Exception as e:
         print(f"Error getting stats: {e}")
-        return jsonify({'error': str(e)}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/api/admin/employees', methods=['GET'])
+@require_admin
 def get_all_employees():
-    """Get all employees with their stats"""
+    """Get all employees with their stats - Admin only"""
     try:
         employees = User.query.order_by(User.name).all()
         employee_list = []
@@ -709,11 +952,69 @@ def get_all_employees():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/admin/audit-logs', methods=['GET'])
+@require_admin
+def get_audit_logs():
+    """Get audit logs - Admin only"""
+    try:
+        # Get filter parameters
+        action_type = request.args.get('action_type', 'all')
+        action_category = request.args.get('category', 'all')
+        user_email = request.args.get('user_email', '')
+        status = request.args.get('status', 'all')
+        limit = int(request.args.get('limit', 100))
+        offset = int(request.args.get('offset', 0))
+        
+        query = AuditLog.query
+        
+        # Apply filters
+        if action_type != 'all':
+            query = query.filter_by(action_type=action_type)
+        
+        if action_category != 'all':
+            query = query.filter_by(action_category=action_category)
+        
+        if user_email:
+            query = query.filter_by(user_email=user_email)
+        
+        if status != 'all':
+            query = query.filter_by(status=status)
+        
+        # Order by timestamp (newest first) and paginate
+        logs = query.order_by(AuditLog.timestamp.desc()).limit(limit).offset(offset).all()
+        total = query.count()
+        
+        return jsonify({
+            'logs': [log.to_dict() for log in logs],
+            'total': total,
+            'limit': limit,
+            'offset': offset
+        })
+    except Exception as e:
+        print(f"Error getting audit logs: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/admin/employees/<int:user_id>/conversations', methods=['GET'])
+@require_admin
 def get_employee_conversations(user_id):
-    """Get all conversations for a specific employee"""
+    """Get all conversations for a specific employee - Admin only"""
     try:
         user = User.query.get(user_id)
+        
+        # Log admin data access
+        admin_email = request.args.get('email', '').strip().lower()
+        log_audit_event(
+            action_type='admin_data_access',
+            action_category='admin',
+            description=f'Admin viewed conversations for user: {user.email if user else user_id}',
+            user_email=admin_email,
+            status='success',
+            metadata={'target_user_id': user_id, 'target_user_email': user.email if user else None}
+        )
+        
+        if not user:
         if not user:
             return jsonify({'error': 'User not found'}), 404
         
@@ -749,18 +1050,68 @@ def get_employee_conversations(user_id):
 def login_user():
     """Login or create user (email-only, no password required)"""
     try:
+        if not request.is_json:
+            return jsonify({'error': 'Content-Type must be application/json'}), 400
+        
         data = request.json
+        if not data:
+            return jsonify({'error': 'Request body is required'}), 400
+        
         email = data.get('email', '').strip().lower()
         name = data.get('name', '').strip()
         
+        # Input validation and sanitization
+        if not email:
+            return jsonify({'error': 'Email is required'}), 400
+        
+        if len(email) > 255:
+            return jsonify({'error': 'Email is too long'}), 400
+        
         # Validate email format
         if not email.endswith('@geoconinc.com'):
+            log_audit_event(
+                action_type='login',
+                action_category='authentication',
+                description=f'Login attempt with invalid email domain: {email}',
+                user_email=email,
+                status='failure',
+                metadata={'reason': 'invalid_domain'}
+            )
             return jsonify({'error': 'Email must be a @geoconinc.com address'}), 400
+        
+        # Basic email format validation
+        import re
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@geoconinc\.com$'
+        if not re.match(email_pattern, email):
+            log_audit_event(
+                action_type='login',
+                action_category='authentication',
+                description=f'Login attempt with invalid email format: {email}',
+                user_email=email,
+                status='failure',
+                metadata={'reason': 'invalid_format'}
+            )
+            return jsonify({'error': 'Invalid email format'}), 400
+        
+        # Validate name if provided
+        if name and len(name) > 255:
+            return jsonify({'error': 'Name is too long (max 255 characters)'}), 400
         
         # Get or create user (no password check)
         # Flask routes already run in app context, so no need to wrap
         user = get_or_create_user(email, name)
         update_user_last_login(user)
+        
+        # Log successful login
+        log_audit_event(
+            action_type='login',
+            action_category='authentication',
+            description=f'User logged in: {email}',
+            user_id=user.id,
+            user_email=email,
+            status='success',
+            metadata={'is_new_user': user.created_at == user.last_login if user.created_at else False}
+        )
         
         return jsonify({
             'success': True,
@@ -806,6 +1157,17 @@ def update_user_name(user_id):
         
         print(f"Updated user {user.email} name to: {new_name} (email preserved)")
         
+        # Log name update
+        log_audit_event(
+            action_type='update_name',
+            action_category='data',
+            description=f'User updated display name to: {new_name}',
+            user_id=user_id,
+            user_email=user.email,
+            status='success',
+            metadata={'old_name': user.name, 'new_name': new_name}
+        )
+        
         return jsonify({
             'success': True,
             'user': user.to_dict()
@@ -837,10 +1199,32 @@ def get_user_conversations(user_id):
 def create_conversation():
     """Create a new conversation (or update if exists)"""
     try:
+        if not request.is_json:
+            return jsonify({'error': 'Content-Type must be application/json'}), 400
+        
         data = request.json
+        if not data:
+            return jsonify({'error': 'Request body is required'}), 400
+        
         user_id = data.get('user_id')
         title = data.get('title', 'New Chat')
         conversation_id = data.get('id', f'chat-{datetime.now().timestamp()}')
+        
+        # Input validation
+        if not user_id:
+            return jsonify({'error': 'user_id is required'}), 400
+        
+        if not isinstance(user_id, int):
+            try:
+                user_id = int(user_id)
+            except (ValueError, TypeError):
+                return jsonify({'error': 'Invalid user_id format'}), 400
+        
+        if title and len(title) > 500:
+            return jsonify({'error': 'Title is too long (max 500 characters)'}), 400
+        
+        if conversation_id and len(conversation_id) > 255:
+            return jsonify({'error': 'Conversation ID is too long'}), 400
         
         user = User.query.get(user_id)
         if not user:
@@ -849,15 +1233,18 @@ def create_conversation():
         # Check if conversation already exists
         conversation = Conversation.query.get(conversation_id)
         if conversation:
+            # Verify ownership
+            if conversation.user_id != user_id:
+                return jsonify({'error': 'Unauthorized access to conversation'}), 403
             # Update existing conversation
-            conversation.title = title
+            conversation.title = title[:500]  # Ensure length limit
             conversation.updated_at = datetime.utcnow()
         else:
             # Create new conversation
             conversation = Conversation(
-                id=conversation_id,
+                id=conversation_id[:255],  # Ensure length limit
                 user_id=user_id,
-                title=title
+                title=title[:500]  # Ensure length limit
             )
             db.session.add(conversation)
         
@@ -869,24 +1256,49 @@ def create_conversation():
         db.session.rollback()
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/api/conversations/<conversation_id>/messages', methods=['POST'])
 def add_message():
     """Add a message to a conversation"""
     try:
+        if not request.is_json:
+            return jsonify({'error': 'Content-Type must be application/json'}), 400
+        
         data = request.json
+        if not data:
+            return jsonify({'error': 'Request body is required'}), 400
+        
         conversation_id = data.get('conversation_id') or conversation_id
         role = data.get('role')  # 'user' or 'assistant'
         content = data.get('content')
         metadata = data.get('metadata', {})
         
-        conversation = Conversation.query.get_or_404(conversation_id)
+        # Input validation
+        if not conversation_id:
+            return jsonify({'error': 'conversation_id is required'}), 400
+        
+        if not role or role not in ['user', 'assistant']:
+            return jsonify({'error': 'role must be "user" or "assistant"'}), 400
+        
+        if not content:
+            return jsonify({'error': 'content is required'}), 400
+        
+        if len(content) > 100000:  # 100KB max message
+            return jsonify({'error': 'Message content is too long (max 100,000 characters)'}), 400
+        
+        if len(conversation_id) > 255:
+            return jsonify({'error': 'Conversation ID is too long'}), 400
+        
+        conversation = Conversation.query.get(conversation_id)
+        if not conversation:
+            return jsonify({'error': 'Conversation not found'}), 404
+        
         message = Message(
-            conversation_id=conversation_id,
+            conversation_id=conversation_id[:255],  # Ensure length limit
             role=role,
-            content=content,
-            message_metadata=metadata  # Use message_metadata (metadata is reserved in SQLAlchemy)
+            content=content[:100000],  # Ensure length limit
+            message_metadata=metadata if isinstance(metadata, dict) else {}  # Use message_metadata (metadata is reserved in SQLAlchemy)
         )
         db.session.add(message)
         
@@ -902,18 +1314,18 @@ def add_message():
             ).order_by(Message.timestamp.desc()).first()
             
             if user_msg:
-                submission_id = f"{conversation_id}-{user_msg.id}"
+                submission_id = f"{conversation_id}-{user_msg.id}"[:255]  # Ensure length limit
                 submission = Submission(
                     id=submission_id,
                     user_id=conversation.user_id,
-                    conversation_id=conversation_id,
-                    prompt=user_msg.content,
-                    response=content,
-                    status=metadata.get('confidentialStatus', 'safe'),
-                    check_results=metadata.get('checkResults', []),
-                    files_processed=metadata.get('filesCount', 0),
-                    sharepoint_searched=metadata.get('sharepointSearched', False),
-                    sharepoint_results_count=metadata.get('sharepointResultsCount', 0)
+                    conversation_id=conversation_id[:255],
+                    prompt=user_msg.content[:50000],  # Limit prompt size
+                    response=content[:50000],  # Limit response size
+                    status=metadata.get('confidentialStatus', 'safe')[:50] if isinstance(metadata, dict) else 'safe',
+                    check_results=metadata.get('checkResults', []) if isinstance(metadata, dict) else [],
+                    files_processed=metadata.get('filesCount', 0) if isinstance(metadata, dict) else 0,
+                    sharepoint_searched=metadata.get('sharepointSearched', False) if isinstance(metadata, dict) else False,
+                    sharepoint_results_count=metadata.get('sharepointResultsCount', 0) if isinstance(metadata, dict) else 0
                 )
                 db.session.add(submission)
         
@@ -924,12 +1336,44 @@ def add_message():
         db.session.rollback()
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({'status': 'ok', 'message': 'Geocon AI Usage Monitor API is running'})
+
+@app.route('/api/model-info', methods=['GET'])
+def get_model_info():
+    """Get information about the AI model being used"""
+    try:
+        # Get deployment name (this is what you configure in Azure OpenAI)
+        deployment_name = AZURE_OPENAI_DEPLOYMENT
+        
+        # Try to get model info from Azure OpenAI
+        model_info = {
+            'deployment_name': deployment_name,
+            'endpoint': AZURE_OPENAI_ENDPOINT if AZURE_OPENAI_ENDPOINT else 'Not configured',
+            'api_version': AZURE_API_VERSION,
+            'configured': bool(AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY),
+            'note': 'The deployment name is what you set in Azure OpenAI. The actual model (GPT-4, GPT-3.5, etc.) depends on what model you assigned to this deployment in Azure Portal.'
+        }
+        
+        # Try to get actual model info if client is available
+        if client:
+            try:
+                # Make a test call to get model information
+                # Note: Azure OpenAI doesn't directly expose model name, but we can infer from deployment
+                model_info['client_configured'] = True
+                model_info['inference'] = 'The deployment name "' + deployment_name + '" is used. Check Azure Portal to see which model (GPT-4, GPT-4 Turbo, GPT-3.5, etc.) is assigned to this deployment.'
+            except Exception as e:
+                model_info['client_error'] = str(e)
+        else:
+            model_info['client_configured'] = False
+        
+        return jsonify(model_info)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # Serve static files (HTML, CSS, JS)
@@ -959,6 +1403,26 @@ def serve_static(path):
     return jsonify({'error': 'File not found'}), 404
 
 
+# Global error handler
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Endpoint not found'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    db.session.rollback()
+    return jsonify({'error': 'Internal server error'}), 500
+
+@app.errorhandler(413)
+def request_too_large(error):
+    return jsonify({'error': 'Request payload too large'}), 413
+
+# Request timeout handler (handled by gunicorn in production)
+@app.before_request
+def before_request():
+    # Set request timeout (handled by gunicorn in production)
+    pass
+
 if __name__ == '__main__':
     print("\n" + "="*60)
     print("Geocon AI Usage Monitor - Starting Server")
@@ -968,6 +1432,10 @@ if __name__ == '__main__':
     print(f"Deployment: {AZURE_OPENAI_DEPLOYMENT}")
     print(f"API Version: {AZURE_API_VERSION}")
     print(f"API Key configured: {'Yes' if AZURE_OPENAI_KEY and len(AZURE_OPENAI_KEY) > 20 else 'No'}")
+    print(f"\nDatabase Configuration:")
+    print(f"  Connection Pool Size: 20")
+    print(f"  Max Overflow: 10")
+    print(f"  Pool Timeout: 30s")
     print(f"\nSharePoint Integration:")
     print(f"  Site URL: {SHAREPOINT_SITE_URL if SHAREPOINT_SITE_URL else 'Not configured'}")
     print(f"  Tenant: {SHAREPOINT_TENANT if SHAREPOINT_TENANT else 'Not configured'}")
@@ -976,6 +1444,10 @@ if __name__ == '__main__':
     print(f"  Using Graph API: {SHAREPOINT_USE_GRAPH_API}")
     if not SHAREPOINT_SITE_URL or not SHAREPOINT_CLIENT_ID:
         print(f"  WARNING: SharePoint search will be disabled until configured")
+    print(f"\nSecurity Settings:")
+    print(f"  Max File Size: {MAX_FILE_SIZE / 1024 / 1024} MB")
+    print(f"  Max Files per Request: {MAX_FILES}")
+    print(f"  Max Prompt Length: 50,000 characters")
     print(f"\nServer URL: http://localhost:5000")
     print(f"API Endpoint: http://localhost:5000/api/submit")
     print("="*60)

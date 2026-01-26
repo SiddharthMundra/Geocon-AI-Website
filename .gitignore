@@ -8,25 +8,51 @@ env/
 venv/
 ENV/
 .venv
+*.egg-info/
+dist/
+build/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+geocon_ai.db
 
 # Data files
 submissions.json
+*.json.bak
 
 # Environment variables
 .env
 .env.local
 .env.production
+.env.*
 
 # API Keys and Secrets (DO NOT COMMIT)
 # Make sure app.py uses environment variables, not hardcoded keys
+secrets.txt
+credentials.txt
+config.local.py
+
+# Logs
+*.log
+logs/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.sublime-project
+*.sublime-workspace
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+~*
 
