@@ -384,9 +384,14 @@ function showSettings() {
 }
 
 // Hide settings modal
-function hideSettings() {
+function hideSettings(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
     document.getElementById('settings-modal').classList.add('hidden');
     document.getElementById('settings-error').classList.add('hidden');
+    // Don't navigate anywhere - just hide the modal
 }
 
 // Handle settings save
@@ -517,7 +522,7 @@ async function checkServerConnection() {
 }
 
 // Create new chat
-function createNewChat() {
+async function createNewChat() {
     currentChatId = null;
     document.getElementById('chat-messages').innerHTML = `
         <div class="welcome-message">
@@ -530,21 +535,52 @@ function createNewChat() {
     renderFileList();
     renderChatHistory();
     localStorage.removeItem(`current_chat_${currentUser.email}`);
+    
+    // Note: Conversation will be created in database when first message is sent
 }
 
 // Load chat
-function loadChat(chatId) {
+async function loadChat(chatId) {
     const chat = conversations.find(c => c.id === chatId);
     if (!chat) return;
     
     currentChatId = chatId;
     localStorage.setItem(`current_chat_${currentUser.email}`, chatId);
     
+    // Load messages from database if available (they have proper timestamps)
+    if (currentUser && currentUser.id) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/users/${currentUser.id}/conversations`);
+            if (response.ok) {
+                const dbConversations = await response.json();
+                const dbChat = dbConversations.find(c => c.id === chatId);
+                if (dbChat && dbChat.messages && dbChat.messages.length > 0) {
+                    // Use database messages (they have proper timestamps)
+                    chat.messages = dbChat.messages.map(msg => ({
+                        role: msg.role,
+                        content: msg.content,
+                        timestamp: msg.timestamp || msg.created_at,
+                        metadata: msg.metadata || {}
+                    }));
+                }
+            }
+        } catch (error) {
+            console.log('Could not load messages from database, using local:', error);
+        }
+    }
+    
     // Render messages
     const messagesContainer = document.getElementById('chat-messages');
     messagesContainer.innerHTML = '';
     
-    chat.messages.forEach(message => {
+    // Sort messages by timestamp
+    const sortedMessages = [...chat.messages].sort((a, b) => {
+        const timeA = new Date(a.timestamp || a.created_at || 0);
+        const timeB = new Date(b.timestamp || b.created_at || 0);
+        return timeA - timeB;
+    });
+    
+    sortedMessages.forEach(message => {
         appendMessage(message.role, message.content, message.metadata);
     });
     
@@ -579,6 +615,28 @@ async function sendMessage() {
             employeeEmail: currentUser.email
         };
         conversations.unshift(newChat);
+        
+        // Create conversation in database immediately
+        if (currentUser && currentUser.id) {
+            try {
+                const response = await fetch(`${API_BASE_URL}/conversations`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: currentUser.id,
+                        id: currentChatId,
+                        title: newChat.title
+                    })
+                });
+                
+                if (!response.ok) {
+                    console.error('Failed to create conversation in database');
+                }
+            } catch (error) {
+                console.error('Error creating conversation in database:', error);
+            }
+        }
+        
         saveConversations();
         renderChatHistory();
     }
@@ -587,21 +645,37 @@ async function sendMessage() {
     const chat = conversations.find(c => c.id === currentChatId);
     
     // Add user message to UI
-    appendMessage('user', prompt, {
+    const userMetadata = {
         filesCount: selectedFiles.length,
         fileNames: selectedFiles.map(f => f.name)
-    });
+    };
+    appendMessage('user', prompt, userMetadata);
     
     // Add user message to chat
     chat.messages.push({
         role: 'user',
         content: prompt,
         timestamp: new Date().toISOString(),
-        metadata: {
-            filesCount: selectedFiles.length,
-            fileNames: selectedFiles.map(f => f.name)
-        }
+        metadata: userMetadata
     });
+    
+    // Save user message to database immediately
+    if (currentUser && currentUser.id && currentChatId) {
+        try {
+            await fetch(`${API_BASE_URL}/conversations/${currentChatId}/messages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    conversation_id: currentChatId,
+                    role: 'user',
+                    content: prompt,
+                    metadata: userMetadata
+                })
+            });
+        } catch (error) {
+            console.error('Error saving user message to database:', error);
+        }
+    }
     
     // Clear input
     promptInput.value = '';
@@ -655,27 +729,42 @@ async function sendMessage() {
         }
         
         // Replace loading message with AI response (using same ID)
-        appendMessage('ai', data.chatgptResponse, {
+        const aiMetadata = {
             confidentialStatus: data.confidentialStatus,
             checkResults: data.checkResults,
             sharepointSearched: data.sharepointSearched || false,
             sharepointResultsCount: data.sharepointResultsCount || 0,
-            filesProcessed: data.filesProcessed || 0
-        }, loadingId);
+            filesProcessed: data.filesProcessed || 0,
+            ...(data.aiMetadata || {})  // Include AI metadata (tokens, latency, model, etc.)
+        };
+        
+        appendMessage('ai', data.chatgptResponse, aiMetadata, loadingId);
         
         // Add AI message to chat
         chat.messages.push({
             role: 'assistant',
             content: data.chatgptResponse,
             timestamp: new Date().toISOString(),
-            metadata: {
-                confidentialStatus: data.confidentialStatus,
-                checkResults: data.checkResults,
-                sharepointSearched: data.sharepointSearched || false,
-                sharepointResultsCount: data.sharepointResultsCount || 0,
-                filesProcessed: data.filesProcessed || 0
-            }
+            metadata: aiMetadata
         });
+        
+        // Save assistant message to database with full metadata
+        if (currentUser && currentUser.id && currentChatId) {
+            try {
+                await fetch(`${API_BASE_URL}/conversations/${currentChatId}/messages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        conversation_id: currentChatId,
+                        role: 'assistant',
+                        content: data.chatgptResponse,
+                        metadata: aiMetadata
+                    })
+                });
+            } catch (error) {
+                console.error('Error saving assistant message to database:', error);
+            }
+        }
         
         // Update chat title if it's the first message
         if (chat.messages.length === 2) {
@@ -943,9 +1032,28 @@ function renderChatHistory() {
 }
 
 // Delete chat
-function deleteChat(chatId, event) {
+async function deleteChat(chatId, event) {
     event.stopPropagation();
     if (confirm('Delete this conversation?')) {
+        // Delete from database
+        if (currentUser && currentUser.id) {
+            try {
+                const response = await fetch(`${API_BASE_URL}/conversations/${chatId}?user_id=${currentUser.id}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to delete conversation');
+                }
+            } catch (error) {
+                console.error('Error deleting conversation from database:', error);
+                alert('Failed to delete conversation from database. Please try again.');
+                return;
+            }
+        }
+        
+        // Remove from local array
         conversations = conversations.filter(c => c.id !== chatId);
         if (currentChatId === chatId) {
             createNewChat();
@@ -1072,18 +1180,27 @@ async function saveConversationToDatabase(chat) {
             return;
         }
         
-        // Save all messages
+        // Save all messages with proper timing
         for (const message of chat.messages) {
-            await fetch(`${API_BASE_URL}/conversations/${chat.id}/messages`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    conversation_id: chat.id,
-                    role: message.role,
-                    content: message.content,
-                    metadata: message.metadata || {}
-                })
-            });
+            try {
+                await fetch(`${API_BASE_URL}/conversations/${chat.id}/messages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        conversation_id: chat.id,
+                        role: message.role,
+                        content: message.content,
+                        metadata: {
+                            ...(message.metadata || {}),
+                            // Preserve timestamp if available
+                            timestamp: message.timestamp || message.created_at || new Date().toISOString()
+                        }
+                    })
+                });
+            } catch (msgError) {
+                console.error('Error saving message to database:', msgError);
+                // Continue with other messages
+            }
         }
     } catch (error) {
         console.error('Error saving conversation to database:', error);

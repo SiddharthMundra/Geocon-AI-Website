@@ -37,14 +37,15 @@ class User(db.Model):
 class Conversation(db.Model):
     __tablename__ = 'conversations'
     
-    id = db.Column(db.String(255), primary_key=True)
+    id = db.Column(db.String(255), primary_key=True)  # UUID
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
     title = db.Column(db.String(500), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    is_deleted = db.Column(db.Boolean, default=False, index=True)  # Soft delete
     
     # Relationships
-    messages = db.relationship('Message', backref='conversation', lazy=True, cascade='all, delete-orphan', order_by='Message.timestamp')
+    messages = db.relationship('Message', backref='conversation', lazy=True, cascade='all, delete-orphan', order_by='Message.created_at')
     
     def to_dict(self):
         return {
@@ -53,9 +54,10 @@ class Conversation(db.Model):
             'title': self.title,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'is_deleted': self.is_deleted,
             'employeeName': self.user.name,
             'employeeEmail': self.user.email,
-            'messages': [msg.to_dict() for msg in self.messages]
+            'messages': [msg.to_dict() for msg in self.messages if not self.is_deleted]
         }
 
 # Message Model
@@ -64,10 +66,12 @@ class Message(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     conversation_id = db.Column(db.String(255), db.ForeignKey('conversations.id'), nullable=False, index=True)
-    role = db.Column(db.String(50), nullable=False)  # 'user' or 'assistant'
+    role = db.Column(db.String(50), nullable=False, index=True)  # 'user', 'assistant', 'system', 'tool'
     content = db.Column(db.Text, nullable=False)
-    message_metadata = db.Column(db.JSON)  # Store metadata as JSON (renamed from 'metadata' - reserved word)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)  # Renamed from timestamp
+    # Message metadata stored as JSON with: model, temperature, top_p, max_output_tokens, 
+    # token_in, token_out, total_tokens, latency_ms, finish_reason, client_context, safety_flags
+    message_metadata = db.Column(db.JSON)
     
     def to_dict(self):
         return {
@@ -75,8 +79,9 @@ class Message(db.Model):
             'conversation_id': self.conversation_id,
             'role': self.role,
             'content': self.content,
-            'metadata': self.message_metadata,  # Return as 'metadata' in API
-            'timestamp': self.timestamp.isoformat() if self.timestamp else None
+            'metadata': self.message_metadata or {},  # Return as 'metadata' in API
+            'timestamp': self.created_at.isoformat() if self.created_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
 # Submission Model (for admin dashboard - denormalized for easy querying)
@@ -128,7 +133,7 @@ class AuditLog(db.Model):
     request_method = db.Column(db.String(10), nullable=True)  # GET, POST, etc.
     request_path = db.Column(db.String(500), nullable=True)
     status = db.Column(db.String(50), nullable=True, index=True)  # 'success', 'failure', 'error', 'unauthorized'
-    metadata = db.Column(db.JSON)  # Additional context data
+    audit_metadata = db.Column(db.JSON)  # Additional context data (renamed from 'metadata' - reserved word)
     
     # Relationships
     user = db.relationship('User', backref='audit_logs', lazy=True)
@@ -149,7 +154,7 @@ class AuditLog(db.Model):
             'request_method': self.request_method,
             'request_path': self.request_path,
             'status': self.status,
-            'metadata': self.metadata or {}
+            'metadata': self.audit_metadata or {}  # Return as 'metadata' in API
         }
 
 # Helper functions

@@ -18,7 +18,7 @@ CORS(app, resources={
     r"/api/*": {
         "origins": os.getenv('ALLOWED_ORIGINS', '*').split(','),
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"],
+        "allow_headers": ["Content-Type", "Authorization", "X-User-Email"],
         "max_age": 3600
     }
 })
@@ -32,6 +32,7 @@ if not DATABASE_URL or DATABASE_URL.strip() == '':
     DATABASE_URL = None
 
 # Render PostgreSQL URLs sometimes need sslmode
+# Convert postgres:// to postgresql:// (SQLAlchemy prefers postgresql://)
 if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
 
@@ -45,7 +46,7 @@ if not DATABASE_URL or DATABASE_URL.strip() == '':
 try:
     import psycopg
     # Use psycopg driver (version 3) - works with Python 3.13
-    if DATABASE_URL.startswith('postgresql://'):
+    if DATABASE_URL and DATABASE_URL.startswith('postgresql://'):
         DATABASE_URL = DATABASE_URL.replace('postgresql://', 'postgresql+psycopg://', 1)
     print(f"Using psycopg (v3) driver for PostgreSQL")
 except ImportError:
@@ -56,21 +57,34 @@ except ImportError:
     except ImportError:
         print("WARNING: Neither psycopg nor psycopg2 found! Database may not work.")
 
-print(f"Database URL configured: {DATABASE_URL[:50]}...")
+# Only print first 50 chars of database URL for security (don't log full credentials)
+if DATABASE_URL:
+    db_url_preview = DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL[:50]
+    print(f"Database URL configured: ...@{db_url_preview}")
+else:
+    print("Database URL: Not configured (using SQLite fallback)")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Enhanced connection pooling for 20+ concurrent users
+# Configure database connection args
+connect_args = {
+    'connect_timeout': 10,  # Connection timeout in seconds
+    'application_name': 'geocon_ai_app'
+}
+
+# Add SSL mode for PostgreSQL (required on Render and most cloud providers)
+if DATABASE_URL and ('postgresql' in DATABASE_URL or 'postgres' in DATABASE_URL):
+    # Render and most cloud providers require SSL
+    connect_args['sslmode'] = 'require'
+
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_pre_ping': True,  # Verify connections before using
     'pool_recycle': 300,    # Recycle connections after 5 minutes
     'pool_size': 20,        # Number of connections to maintain
     'max_overflow': 10,     # Additional connections beyond pool_size
     'pool_timeout': 30,     # Timeout for getting connection from pool
-    'connect_args': {
-        'connect_timeout': 10,  # Connection timeout in seconds
-        'application_name': 'geocon_ai_app'
-    }
+    'connect_args': connect_args
 }
 
 # Ensure no bind key is set (use default)
@@ -154,7 +168,7 @@ def log_audit_event(action_type, action_category, description, user_id=None, use
             request_method=request.method,
             request_path=request.path[:500],
             status=status,
-            metadata=metadata or {}
+            audit_metadata=metadata or {}  # Use audit_metadata (metadata is reserved in SQLAlchemy)
         )
         db.session.add(audit_log)
         db.session.commit()
@@ -582,7 +596,7 @@ def build_prompt_with_files(user_prompt, file_contents):
 
 
 def call_azure_openai(prompt, sharepoint_context=None, file_contents=None):
-    """Call Azure OpenAI API to get response with timeout"""
+    """Call Azure OpenAI API to get response with timeout. Returns (response_text, metadata_dict)"""
     if not client:
         raise Exception("Azure OpenAI client not configured. Please set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY.")
     
@@ -610,7 +624,8 @@ def call_azure_openai(prompt, sharepoint_context=None, file_contents=None):
             print(f"  File content: {len(file_contents)} files")
         
         # Call with timeout (Azure OpenAI SDK handles timeouts internally)
-        import signal
+        import time
+        start_time = time.time()
         
         response = client.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT,
@@ -623,6 +638,8 @@ def call_azure_openai(prompt, sharepoint_context=None, file_contents=None):
             timeout=60.0  # 60 second timeout
         )
         
+        latency_ms = int((time.time() - start_time) * 1000)
+        
         if not response or not response.choices or len(response.choices) == 0:
             raise Exception("Empty response from Azure OpenAI")
         
@@ -630,8 +647,24 @@ def call_azure_openai(prompt, sharepoint_context=None, file_contents=None):
         if not result:
             raise Exception("Empty content in response")
         
-        print(f"  API call successful")
-        return result
+        # Extract metadata from response
+        usage = response.usage if hasattr(response, 'usage') else None
+        finish_reason = response.choices[0].finish_reason if hasattr(response.choices[0], 'finish_reason') else None
+        
+        metadata = {
+            'model': AZURE_OPENAI_DEPLOYMENT,
+            'temperature': 0.7,
+            'max_completion_tokens': 2000,
+            'token_in': usage.prompt_tokens if usage else None,
+            'token_out': usage.completion_tokens if usage else None,
+            'total_tokens': usage.total_tokens if usage else None,
+            'latency_ms': latency_ms,
+            'finish_reason': finish_reason,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+        print(f"  API call successful (latency: {latency_ms}ms, tokens: {metadata.get('total_tokens', 'N/A')})")
+        return result, metadata
     except Exception as e:
         error_details = f"Azure OpenAI API error: {str(e)}"
         print(f"  ERROR: {error_details}")
@@ -762,12 +795,13 @@ def submit_prompt():
         # Call Azure OpenAI API
         print("Calling Azure OpenAI API...")
         try:
-            chatgpt_response = call_azure_openai(
+            chatgpt_response, ai_metadata = call_azure_openai(
                 prompt, 
                 sharepoint_results if sharepoint_results else None,
                 file_contents if file_contents else None
             )
             print(f"Azure OpenAI response received: {len(chatgpt_response)} characters")
+            print(f"  Tokens: {ai_metadata.get('total_tokens', 'N/A')}, Latency: {ai_metadata.get('latency_ms', 'N/A')}ms")
         except Exception as e:
             error_msg = f'Failed to get ChatGPT response: {str(e)}'
             print(f"ERROR: {error_msg}")
@@ -848,7 +882,8 @@ def submit_prompt():
             'submissionId': submission_id,
             'sharepointSearched': search_sharepoint,
             'sharepointResultsCount': len(sharepoint_results) if sharepoint_results else 0,
-            'filesProcessed': len(file_contents) if file_contents else 0
+            'filesProcessed': len(file_contents) if file_contents else 0,
+            'aiMetadata': ai_metadata  # Include AI metadata (tokens, latency, etc.)
         })
         
     except Exception as e:
@@ -1003,22 +1038,25 @@ def get_employee_conversations(user_id):
     try:
         user = User.query.get(user_id)
         
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
         # Log admin data access
         admin_email = request.args.get('email', '').strip().lower()
         log_audit_event(
             action_type='admin_data_access',
             action_category='admin',
-            description=f'Admin viewed conversations for user: {user.email if user else user_id}',
+            description=f'Admin viewed conversations for user: {user.email}',
             user_email=admin_email,
             status='success',
-            metadata={'target_user_id': user_id, 'target_user_email': user.email if user else None}
+            metadata={'target_user_id': user_id, 'target_user_email': user.email}
         )
         
-        if not user:
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        conversations = Conversation.query.filter_by(user_id=user_id).order_by(Conversation.updated_at.desc()).all()
+        # Only get non-deleted conversations
+        conversations = Conversation.query.filter_by(
+            user_id=user_id,
+            is_deleted=False
+        ).order_by(Conversation.updated_at.desc()).all()
         
         # Get submission stats for each conversation
         conversation_list = []
@@ -1187,7 +1225,11 @@ def get_user_conversations(user_id):
         if not user:
             return jsonify({'error': 'User not found'}), 404
         
-        conversations = Conversation.query.filter_by(user_id=user_id).order_by(Conversation.updated_at.desc()).all()
+        # Only get non-deleted conversations
+        conversations = Conversation.query.filter_by(
+            user_id=user_id, 
+            is_deleted=False
+        ).order_by(Conversation.updated_at.desc()).all()
         return jsonify([conv.to_dict() for conv in conversations])
     except Exception as e:
         print(f"Error getting conversations: {e}")
@@ -1236,15 +1278,18 @@ def create_conversation():
             # Verify ownership
             if conversation.user_id != user_id:
                 return jsonify({'error': 'Unauthorized access to conversation'}), 403
-            # Update existing conversation
+            # Update existing conversation (restore if was deleted)
             conversation.title = title[:500]  # Ensure length limit
             conversation.updated_at = datetime.utcnow()
+            if conversation.is_deleted:
+                conversation.is_deleted = False  # Restore if it was soft-deleted
         else:
             # Create new conversation
             conversation = Conversation(
                 id=conversation_id[:255],  # Ensure length limit
                 user_id=user_id,
-                title=title[:500]  # Ensure length limit
+                title=title[:500],  # Ensure length limit
+                is_deleted=False  # Explicitly set to False for new conversations
             )
             db.session.add(conversation)
         
@@ -1253,6 +1298,56 @@ def create_conversation():
         return jsonify(conversation.to_dict())
     except Exception as e:
         print(f"Error creating/updating conversation: {e}")
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/conversations/<conversation_id>', methods=['DELETE'])
+def delete_conversation(conversation_id):
+    """Delete a conversation (soft delete)"""
+    try:
+        # Get user_id from request (query param or JSON body)
+        user_id = request.args.get('user_id')
+        if not user_id and request.is_json:
+            user_id = request.json.get('user_id') if request.json else None
+        
+        if not user_id:
+            return jsonify({'error': 'user_id is required'}), 400
+        
+        try:
+            user_id = int(user_id)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid user_id format'}), 400
+        
+        # Get conversation
+        conversation = Conversation.query.get(conversation_id)
+        if not conversation:
+            return jsonify({'error': 'Conversation not found'}), 404
+        
+        # Verify ownership
+        if conversation.user_id != user_id:
+            return jsonify({'error': 'Unauthorized: You can only delete your own conversations'}), 403
+        
+        # Soft delete
+        conversation.is_deleted = True
+        conversation.updated_at = datetime.utcnow()
+        db.session.commit()
+        
+        # Log deletion
+        log_audit_event(
+            action_type='conversation_deleted',
+            action_category='data',
+            description=f'User deleted conversation: {conversation_id}',
+            user_id=user_id,
+            user_email=conversation.user.email,
+            status='success',
+            metadata={'conversation_id': conversation_id, 'title': conversation.title}
+        )
+        
+        return jsonify({'success': True, 'message': 'Conversation deleted'})
+    except Exception as e:
+        print(f"Error deleting conversation: {e}")
         db.session.rollback()
         import traceback
         traceback.print_exc()
@@ -1294,10 +1389,26 @@ def add_message():
         if not conversation:
             return jsonify({'error': 'Conversation not found'}), 404
         
+        # Parse timestamp from metadata if available, otherwise use current time
+        message_timestamp = datetime.utcnow()
+        if isinstance(metadata, dict) and metadata.get('timestamp'):
+            try:
+                # Try parsing ISO format timestamp
+                timestamp_str = metadata['timestamp']
+                if 'T' in timestamp_str:
+                    # ISO format: 2026-01-21T20:44:59.123Z
+                    message_timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                else:
+                    # Try other formats
+                    message_timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+            except:
+                pass  # Use current time if parsing fails
+        
         message = Message(
             conversation_id=conversation_id[:255],  # Ensure length limit
             role=role,
             content=content[:100000],  # Ensure length limit
+            created_at=message_timestamp,  # Use parsed or current timestamp
             message_metadata=metadata if isinstance(metadata, dict) else {}  # Use message_metadata (metadata is reserved in SQLAlchemy)
         )
         db.session.add(message)
@@ -1311,7 +1422,7 @@ def add_message():
             user_msg = Message.query.filter_by(
                 conversation_id=conversation_id,
                 role='user'
-            ).order_by(Message.timestamp.desc()).first()
+            ).order_by(Message.created_at.desc()).first()
             
             if user_msg:
                 submission_id = f"{conversation_id}-{user_msg.id}"[:255]  # Ensure length limit
@@ -1410,7 +1521,10 @@ def not_found(error):
 
 @app.errorhandler(500)
 def internal_error(error):
-    db.session.rollback()
+    try:
+        db.session.rollback()
+    except:
+        pass  # Ignore if rollback fails
     return jsonify({'error': 'Internal server error'}), 500
 
 @app.errorhandler(413)
