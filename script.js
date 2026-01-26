@@ -61,12 +61,53 @@ function setupLoginListeners() {
 
 // Check authentication
 async function checkAuth() {
+    // First try to verify session token (for persistent login)
+    const sessionToken = localStorage.getItem(STORAGE_KEY_SESSION_TOKEN);
+    if (sessionToken) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/users/verify-session`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_token: sessionToken })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success && data.user) {
+                    // Session is valid, restore user
+                    currentUser = {
+                        email: data.user.email,
+                        name: data.user.name,
+                        id: data.user.id
+                    };
+                    localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(currentUser));
+                    
+                    // Check if user has name
+                    if (currentUser.name && currentUser.name.trim()) {
+                        showApp();
+                    } else {
+                        showNameSetup();
+                    }
+                    return;
+                }
+            } else {
+                // Session invalid or expired, clear it
+                console.log('Session token invalid, clearing...');
+                localStorage.removeItem(STORAGE_KEY_SESSION_TOKEN);
+            }
+        } catch (error) {
+            console.error('Error verifying session:', error);
+            // Fall through to check saved user
+        }
+    }
+    
+    // Fallback: Check saved user and re-login
     const storedUser = localStorage.getItem(STORAGE_KEY_CURRENT_USER);
     if (storedUser) {
         try {
             currentUser = JSON.parse(storedUser);
             
-            // Try to fetch latest user data from database
+            // Try to fetch latest user data from database (this will also get a new session token)
             try {
                 const response = await fetch(`${API_BASE_URL}/users/login`, {
                     method: 'POST',
@@ -80,6 +121,11 @@ async function checkAuth() {
                     currentUser.name = data.user.name;
                     currentUser.id = data.user.id;
                     localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(currentUser));
+                    
+                    // Save session token if provided
+                    if (data.session_token) {
+                        localStorage.setItem(STORAGE_KEY_SESSION_TOKEN, data.session_token);
+                    }
                     
                     // Also update local storage
                     const users = getUsers();
@@ -268,6 +314,30 @@ function setupEventListeners() {
         fileUpload.addEventListener('change', (e) => {
             selectedFiles = Array.from(e.target.files);
             renderFileList();
+        });
+    }
+    
+    // Document type selector
+    const documentTypeSelect = document.getElementById('document-type');
+    if (documentTypeSelect) {
+        documentTypeSelect.addEventListener('change', (e) => {
+            const wrapper = document.querySelector('.document-generator-wrapper');
+            if (e.target.value) {
+                wrapper.classList.add('active');
+                // Update placeholder to indicate document mode
+                const promptInput = document.getElementById('prompt-input');
+                if (promptInput) {
+                    const typeName = e.target.options[e.target.selectedIndex].text.replace(/[📄✉️📊]/g, '').trim();
+                    promptInput.placeholder = `Provide information for ${typeName}... (Shift+Enter for new line, Enter to send)`;
+                }
+            } else {
+                wrapper.classList.remove('active');
+                // Reset placeholder
+                const promptInput = document.getElementById('prompt-input');
+                if (promptInput) {
+                    promptInput.placeholder = 'Type your message... (Shift+Enter for new line, Enter to send)';
+                }
+            }
         });
     }
     
@@ -770,6 +840,10 @@ async function sendMessage() {
     appendLoadingMessage(loadingId);
     
     try {
+        // Get document type if selected
+        const documentTypeSelect = document.getElementById('document-type');
+        const documentType = documentTypeSelect ? documentTypeSelect.value : '';
+        
         // Prepare request
         let requestOptions;
         if (selectedFiles.length > 0) {
@@ -777,6 +851,9 @@ async function sendMessage() {
             formData.append('employeeName', currentUser.name);
             formData.append('prompt', prompt);
             formData.append('searchSharePoint', searchSharePoint);
+            if (documentType) {
+                formData.append('documentType', documentType);
+            }
             
             selectedFiles.forEach(file => {
                 formData.append('files', file);
@@ -795,7 +872,9 @@ async function sendMessage() {
                 body: JSON.stringify({
                     employeeName: currentUser.name,
                     prompt: prompt,
-                    searchSharePoint: searchSharePoint
+                    searchSharePoint: searchSharePoint,
+                    documentType: documentType || null
+                    documentType: documentType || null
                 })
             };
         }

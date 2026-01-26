@@ -26,28 +26,27 @@ CORS(app, resources={
 
 # Database configuration
 # Use DATABASE_URL from environment variable (NEVER hardcode credentials)
+# PostgreSQL ONLY - No SQLite fallback for production
 DATABASE_URL = os.getenv('DATABASE_URL')
 if not DATABASE_URL or DATABASE_URL.strip() == '':
-    print("ERROR: DATABASE_URL environment variable is not set!")
-    print("Please set DATABASE_URL in your environment or Render dashboard.")
-    DATABASE_URL = None
+    print("=" * 60)
+    print("FATAL ERROR: DATABASE_URL environment variable is not set!")
+    print("This application requires PostgreSQL. Please set DATABASE_URL")
+    print("in your environment or Render dashboard.")
+    print("=" * 60)
+    raise RuntimeError("DATABASE_URL environment variable is required")
 
 # Render PostgreSQL URLs sometimes need sslmode
 # Convert postgres:// to postgresql:// (SQLAlchemy prefers postgresql://)
-if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
+if DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
-
-# Ensure DATABASE_URL is valid
-if not DATABASE_URL or DATABASE_URL.strip() == '':
-    print("ERROR: DATABASE_URL is empty or None! Falling back to SQLite.")
-    DATABASE_URL = 'sqlite:///geocon_ai.db'  # Fallback to SQLite
 
 # Check if we're using psycopg (v3) instead of psycopg2
 # If psycopg is installed, use it; otherwise use psycopg2
 try:
     import psycopg
     # Use psycopg driver (version 3) - works with Python 3.13
-    if DATABASE_URL and DATABASE_URL.startswith('postgresql://'):
+    if DATABASE_URL.startswith('postgresql://'):
         DATABASE_URL = DATABASE_URL.replace('postgresql://', 'postgresql+psycopg://', 1)
     print(f"Using psycopg (v3) driver for PostgreSQL")
 except ImportError:
@@ -56,48 +55,30 @@ except ImportError:
         # Use psycopg2 driver (version 2) - works with Python < 3.13
         print(f"Using psycopg2 driver for PostgreSQL")
     except ImportError:
-        print("WARNING: Neither psycopg nor psycopg2 found! Database may not work.")
+        print("FATAL ERROR: Neither psycopg nor psycopg2 found!")
+        raise RuntimeError("PostgreSQL driver (psycopg or psycopg2) is required")
 
 # Only print first 50 chars of database URL for security (don't log full credentials)
-if DATABASE_URL:
-    db_url_preview = DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL[:50]
-    print(f"Database URL configured: ...@{db_url_preview}")
-else:
-    print("Database URL: Not configured (using SQLite fallback)")
+db_url_preview = DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL[:50]
+print(f"Database URL configured: ...@{db_url_preview}")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-# Enhanced connection pooling for 20+ concurrent users
-# Configure database connection args
-# Only add PostgreSQL-specific args if using PostgreSQL
-if DATABASE_URL and ('postgresql' in DATABASE_URL or 'postgres' in DATABASE_URL):
-    # PostgreSQL connection args
-    connect_args = {
-        'connect_timeout': 10,  # Connection timeout in seconds
-        'application_name': 'geocon_ai_app',
-        'sslmode': 'require'  # Render and most cloud providers require SSL
-    }
-    # PostgreSQL-specific pool settings
-    engine_options = {
-        'pool_pre_ping': True,  # Verify connections before using
-        'pool_recycle': 300,    # Recycle connections after 5 minutes
-        'pool_size': 20,        # Number of connections to maintain
-        'max_overflow': 10,     # Additional connections beyond pool_size
-        'pool_timeout': 30,     # Timeout for getting connection from pool
-        'connect_args': connect_args
-    }
-else:
-    # SQLite connection args (no connect_timeout or sslmode)
-    connect_args = {}
-    # SQLite-specific pool settings (smaller pool for local development)
-    engine_options = {
-        'pool_pre_ping': True,
-        'pool_recycle': 300,
-        'pool_size': 5,         # Smaller pool for SQLite
-        'max_overflow': 5,
-        'pool_timeout': 30,
-        'connect_args': connect_args
-    }
+
+# PostgreSQL connection settings for production (20+ concurrent users)
+connect_args = {
+    'connect_timeout': 10,  # Connection timeout in seconds
+    'application_name': 'geocon_ai_app',
+    'sslmode': 'require'  # Render and most cloud providers require SSL
+}
+engine_options = {
+    'pool_pre_ping': True,  # Verify connections before using
+    'pool_recycle': 300,    # Recycle connections after 5 minutes
+    'pool_size': 20,        # Number of connections to maintain
+    'max_overflow': 10,     # Additional connections beyond pool_size
+    'pool_timeout': 30,     # Timeout for getting connection from pool
+    'connect_args': connect_args
+}
 
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
 
@@ -611,6 +592,144 @@ def build_prompt_with_files(user_prompt, file_contents):
     return user_prompt + file_section
 
 
+def get_document_format(document_type):
+    """Get the format template for a document type. Returns None if not found."""
+    # TODO: You can provide the actual formats here or load from a file/database
+    formats = {
+        'proposal': """
+PROJECT PROPOSAL FORMAT:
+
+1. COVER PAGE
+   - Project Title
+   - Client Name
+   - Date
+   - Prepared by: [Your Name/Company]
+
+2. EXECUTIVE SUMMARY
+   - Brief overview of the project
+   - Key objectives
+   - Expected outcomes
+
+3. PROJECT SCOPE
+   - Detailed description of work to be performed
+   - Deliverables
+   - Timeline
+
+4. METHODOLOGY
+   - Approach and methods
+   - Tools and resources
+   - Quality assurance
+
+5. TEAM AND QUALIFICATIONS
+   - Key personnel
+   - Relevant experience
+   - Certifications
+
+6. BUDGET AND COST BREAKDOWN
+   - Itemized costs
+   - Payment terms
+   - Total project cost
+
+7. TIMELINE
+   - Project phases
+   - Milestones
+   - Completion date
+
+8. TERMS AND CONDITIONS
+   - Contract terms
+   - Liability
+   - Intellectual property
+
+9. APPENDICES
+   - Supporting documents
+   - References
+   - Additional information
+""",
+        'letter': """
+BUSINESS LETTER FORMAT:
+
+1. HEADER
+   - Your Company Name and Address
+   - Date
+   - Recipient Name and Address
+
+2. SALUTATION
+   - Formal greeting (Dear [Name/Title])
+
+3. BODY
+   - Opening paragraph: Purpose of the letter
+   - Middle paragraphs: Main content, details, and information
+   - Closing paragraph: Next steps or call to action
+
+4. CLOSING
+   - Professional closing (Sincerely, Best regards, etc.)
+   - Your Name
+   - Your Title
+   - Company Name
+   - Contact Information
+
+5. ENCLOSURES (if applicable)
+   - List of attached documents
+""",
+        'report': """
+REPORT FORMAT:
+
+1. TITLE PAGE
+   - Report Title
+   - Subtitle (if applicable)
+   - Author(s)
+   - Date
+   - Organization
+
+2. TABLE OF CONTENTS
+   - List of sections with page numbers
+
+3. EXECUTIVE SUMMARY
+   - Key findings
+   - Recommendations
+   - Conclusions
+
+4. INTRODUCTION
+   - Background
+   - Objectives
+   - Scope
+
+5. METHODOLOGY
+   - Data collection methods
+   - Analysis approach
+   - Tools used
+
+6. FINDINGS/RESULTS
+   - Detailed findings
+   - Data analysis
+   - Observations
+
+7. DISCUSSION
+   - Interpretation of results
+   - Implications
+   - Limitations
+
+8. CONCLUSIONS
+   - Summary of key points
+   - Main conclusions
+
+9. RECOMMENDATIONS
+   - Action items
+   - Next steps
+   - Suggestions
+
+10. REFERENCES
+    - Citations
+    - Sources
+
+11. APPENDICES
+    - Supporting data
+    - Additional materials
+    - Charts and graphs
+"""
+    }
+    return formats.get(document_type.lower())
+
 def call_azure_openai(prompt, sharepoint_context=None, file_contents=None):
     """Call Azure OpenAI API to get response with timeout. Returns (response_text, metadata_dict)"""
     if not client:
@@ -718,12 +837,14 @@ def submit_prompt():
             employee_name = data.get('employeeName', '').strip() if data else ''
             prompt = data.get('prompt', '').strip() if data else ''
             search_sharepoint = data.get('searchSharePoint', False)
+            document_type = data.get('documentType', '').strip() if data else ''
             files = []
         else:
             # FormData request (may have files)
             employee_name = request.form.get('employeeName', '').strip()
             prompt = request.form.get('prompt', '').strip()
             search_sharepoint = request.form.get('searchSharePoint', 'false').lower() == 'true'
+            document_type = request.form.get('documentType', '').strip()
             files = request.files.getlist('files')
         
         print(f"Request data received: {bool(employee_name and prompt)}")
@@ -815,6 +936,23 @@ def submit_prompt():
                 print(f"Found {len(sharepoint_results)} relevant SharePoint documents")
             else:
                 print("No relevant SharePoint documents found")
+        
+        # Get document format if document type is specified
+        document_format = None
+        if document_type:
+            document_format = get_document_format(document_type)
+            if document_format:
+                print(f"Document type: {document_type}")
+                # Enhance prompt with document format instructions
+                prompt = f"""Generate a {document_type} based on the following information and requirements.
+
+Document Format Requirements:
+{document_format}
+
+User Information and Requirements:
+{prompt}
+
+Please generate a complete, professional {document_type} following the format requirements above. Ensure all sections are properly formatted and the document is ready for use."""
         
         # Call Azure OpenAI API
         print("Calling Azure OpenAI API...")

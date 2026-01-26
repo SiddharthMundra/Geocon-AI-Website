@@ -247,127 +247,9 @@ def init_db(app):
             db.create_all()
             print("[OK] Database tables created/verified successfully")
             
-            # Migrate: Add is_deleted column if it doesn't exist
-            try:
-                # Check if conversations table exists and if is_deleted column exists
-                with engine.connect() as conn:
-                    # Detect database type
-                    db_url = str(engine.url)
-                    is_postgresql = 'postgresql' in db_url or 'postgres' in db_url
-                    is_sqlite = 'sqlite' in db_url
-                    
-                    column_exists = False
-                    
-                    if is_postgresql:
-                        # PostgreSQL: Use information_schema
-                        check_query = text("""
-                            SELECT column_name 
-                            FROM information_schema.columns 
-                            WHERE table_name='conversations' AND column_name='is_deleted'
-                        """)
-                        result = conn.execute(check_query)
-                        column_exists = result.fetchone() is not None
-                    elif is_sqlite:
-                        # SQLite: Use PRAGMA table_info
-                        result = conn.execute(text("PRAGMA table_info(conversations)"))
-                        columns = result.fetchall()
-                        # Check if 'is_deleted' column exists
-                        column_exists = any(col[1] == 'is_deleted' for col in columns)
-                    else:
-                        # Unknown database type, skip migration check
-                        print("[INFO] Unknown database type, skipping migration check")
-                        column_exists = True  # Assume column exists to skip migration
-                    
-                    if not column_exists:
-                        print("Migrating: Adding is_deleted column to conversations table...")
-                        try:
-                            # Add column (works for both PostgreSQL and SQLite)
-                            # Use DEFAULT FALSE for PostgreSQL, DEFAULT 0 for SQLite
-                            if is_postgresql:
-                                # PostgreSQL: Try to add column (will fail if exists, but that's OK)
-                                try:
-                                    conn.execute(text("""
-                                        ALTER TABLE conversations 
-                                        ADD COLUMN is_deleted BOOLEAN DEFAULT FALSE
-                                    """))
-                                    conn.commit()
-                                except Exception as add_col_error:
-                                    # Column might already exist (race condition), check again
-                                    error_str = str(add_col_error).lower()
-                                    if 'already exists' in error_str or 'duplicate' in error_str:
-                                        print("  [INFO] Column already exists (race condition)")
-                                        conn.rollback()
-                                    else:
-                                        raise
-                            else:
-                                # SQLite: Add column
-                                conn.execute(text("""
-                                    ALTER TABLE conversations 
-                                    ADD COLUMN is_deleted BOOLEAN DEFAULT 0
-                                """))
-                                conn.commit()
-                            
-                            # Create index (only for PostgreSQL, SQLite doesn't support IF NOT EXISTS in CREATE INDEX)
-                            if is_postgresql:
-                                try:
-                                    conn.execute(text("""
-                                        CREATE INDEX IF NOT EXISTS ix_conversations_is_deleted 
-                                        ON conversations(is_deleted)
-                                    """))
-                                    conn.commit()
-                                except Exception as idx_error:
-                                    # Index might already exist, that's OK
-                                    print(f"  [INFO] Index creation: {idx_error}")
-                            
-                            # Update existing rows to set is_deleted = FALSE
-                            if is_postgresql:
-                                conn.execute(text("""
-                                    UPDATE conversations 
-                                    SET is_deleted = FALSE 
-                                    WHERE is_deleted IS NULL
-                                """))
-                            else:
-                                conn.execute(text("""
-                                    UPDATE conversations 
-                                    SET is_deleted = 0 
-                                    WHERE is_deleted IS NULL
-                                """))
-                            conn.commit()
-                            
-                            print("[OK] Migration complete: is_deleted column added and existing rows updated")
-                        except Exception as migration_error:
-                            print(f"  [ERROR] Migration failed: {migration_error}")
-                            conn.rollback()
-                            raise
-                    else:
-                        print("[OK] is_deleted column already exists")
-            except Exception as migrate_error:
-                # Table might not exist yet (first run), that's OK
-                # But if it's a column check error, try to add the column anyway
-                error_str = str(migrate_error).lower()
-                if 'no such table' not in error_str and 'does not exist' not in error_str:
-                    # Table exists but migration check failed, try to add column anyway
-                    try:
-                        print("Migration check failed, attempting to add column anyway...")
-                        with engine.connect() as conn:
-                            db_url = str(engine.url)
-                            is_postgresql = 'postgresql' in db_url or 'postgres' in db_url
-                            if is_postgresql:
-                                conn.execute(text("""
-                                    ALTER TABLE conversations 
-                                    ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE
-                                """))
-                            else:
-                                conn.execute(text("""
-                                    ALTER TABLE conversations 
-                                    ADD COLUMN is_deleted BOOLEAN DEFAULT 0
-                                """))
-                            conn.commit()
-                            print("[OK] Column added via fallback migration")
-                    except Exception as fallback_error:
-                        print(f"[INFO] Fallback migration also failed: {fallback_error}")
-                else:
-                    print(f"[INFO] Migration check: {migrate_error}")
+            # Run database migrations for PostgreSQL
+            print("[INFO] Running database migrations...")
+            run_migrations(engine)
             
     except Exception as e:
         print(f"ERROR in init_db: {e}")
@@ -375,6 +257,112 @@ def init_db(app):
         traceback.print_exc()
         # Don't raise - let app continue but database features won't work
         print("WARNING: Database initialization failed. App will continue but database features may not work.")
+
+def run_migrations(engine):
+    """Run all database migrations for PostgreSQL"""
+    db_url = str(engine.url)
+    
+    # Only run migrations for PostgreSQL
+    if 'postgresql' not in db_url and 'postgres' not in db_url:
+        print("[INFO] Skipping migrations - not PostgreSQL")
+        return
+    
+    migrations = [
+        # Migration 1: Add is_deleted column to conversations table
+        {
+            'name': 'Add is_deleted to conversations',
+            'check': """
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name='conversations' AND column_name='is_deleted'
+            """,
+            'up': """
+                ALTER TABLE conversations 
+                ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE
+            """,
+            'post': [
+                """CREATE INDEX IF NOT EXISTS ix_conversations_is_deleted ON conversations(is_deleted)""",
+                """UPDATE conversations SET is_deleted = FALSE WHERE is_deleted IS NULL"""
+            ]
+        },
+        # Migration 2: Add session_token column to users table
+        {
+            'name': 'Add session_token to users',
+            'check': """
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name='users' AND column_name='session_token'
+            """,
+            'up': """
+                ALTER TABLE users 
+                ADD COLUMN IF NOT EXISTS session_token VARCHAR(255)
+            """,
+            'post': [
+                """CREATE INDEX IF NOT EXISTS ix_users_session_token ON users(session_token)"""
+            ]
+        },
+        # Migration 3: Add session_expires column to users table
+        {
+            'name': 'Add session_expires to users',
+            'check': """
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name='users' AND column_name='session_expires'
+            """,
+            'up': """
+                ALTER TABLE users 
+                ADD COLUMN IF NOT EXISTS session_expires TIMESTAMP
+            """,
+            'post': []
+        }
+    ]
+    
+    with engine.connect() as conn:
+        for migration in migrations:
+            try:
+                # Check if migration is needed
+                result = conn.execute(text(migration['check']))
+                column_exists = result.fetchone() is not None
+                
+                if not column_exists:
+                    print(f"  [MIGRATE] {migration['name']}...")
+                    try:
+                        # Run the main migration
+                        conn.execute(text(migration['up']))
+                        conn.commit()
+                        
+                        # Run post-migration steps
+                        for post_sql in migration['post']:
+                            try:
+                                conn.execute(text(post_sql))
+                                conn.commit()
+                            except Exception as post_error:
+                                # Post steps might fail if already done
+                                error_str = str(post_error).lower()
+                                if 'already exists' not in error_str:
+                                    print(f"    [WARN] Post-step: {post_error}")
+                                conn.rollback()
+                        
+                        print(f"  [OK] {migration['name']} - done")
+                    except Exception as up_error:
+                        error_str = str(up_error).lower()
+                        if 'already exists' in error_str or 'duplicate' in error_str:
+                            print(f"  [OK] {migration['name']} - already exists")
+                        else:
+                            print(f"  [ERROR] {migration['name']} failed: {up_error}")
+                        conn.rollback()
+                else:
+                    print(f"  [OK] {migration['name']} - already done")
+            except Exception as check_error:
+                # Table might not exist yet
+                error_str = str(check_error).lower()
+                if 'does not exist' in error_str or 'no such table' in error_str:
+                    print(f"  [INFO] {migration['name']} - table not ready, skipping")
+                else:
+                    print(f"  [WARN] {migration['name']} check failed: {check_error}")
+                conn.rollback()
+    
+    print("[OK] All migrations complete")
 
 def get_or_create_user(email, name=None):
     """Get existing user or create new one"""
