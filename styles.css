@@ -46,7 +46,9 @@ body {
 }
 
 .app-container.hidden {
-    display: none;
+    display: none !important;
+    opacity: 0;
+    pointer-events: none;
 }
 
 /* Sidebar */
@@ -1085,6 +1087,7 @@ body {
     opacity: 0;
     pointer-events: none;
     animation: fadeOut 0.3s ease-out;
+    display: none !important;
 }
 
 @keyframes fadeIn {
@@ -1380,6 +1383,7 @@ body {
     display: none !important;
     opacity: 0;
     pointer-events: none;
+    visibility: hidden;
 }
 
 /* Smooth transitions for modal visibility */

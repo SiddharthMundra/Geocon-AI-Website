@@ -314,6 +314,39 @@ def run_migrations(engine):
                 ADD COLUMN IF NOT EXISTS session_expires TIMESTAMP
             """,
             'post': []
+        },
+        # Migration 4: Add created_at column to messages table
+        {
+            'name': 'Add created_at to messages',
+            'check': """
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name='messages' AND column_name='created_at'
+            """,
+            'up': """
+                ALTER TABLE messages 
+                ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            """,
+            'post': [
+                """CREATE INDEX IF NOT EXISTS ix_messages_created_at ON messages(created_at)""",
+                """UPDATE messages SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"""
+            ]
+        },
+        # Migration 5: Add actor_user_id column to audit_logs table
+        {
+            'name': 'Add actor_user_id to audit_logs',
+            'check': """
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name='audit_logs' AND column_name='actor_user_id'
+            """,
+            'up': """
+                ALTER TABLE audit_logs 
+                ADD COLUMN IF NOT EXISTS actor_user_id INTEGER REFERENCES users(id)
+            """,
+            'post': [
+                """CREATE INDEX IF NOT EXISTS ix_audit_logs_actor_user_id ON audit_logs(actor_user_id)"""
+            ]
         }
     ]
     

@@ -185,15 +185,15 @@ def require_admin(f):
         
         # Try to get from JSON body
         if request.is_json and request.json:
-            user_email = request.json.get('email', '').strip().lower()
+            user_email = (request.json.get('email') or '').strip().lower() if request.json else ''
         
         # Try to get from query params
         if not user_email:
-            user_email = request.args.get('email', '').strip().lower()
+            user_email = (request.args.get('email') or '').strip().lower()
         
         # Try to get from headers (for API calls)
         if not user_email:
-            user_email = request.headers.get('X-User-Email', '').strip().lower()
+            user_email = (request.headers.get('X-User-Email') or '').strip().lower()
         
         # Validate admin access
         if not user_email or user_email not in [email.lower() for email in ADMIN_EMAILS]:
@@ -834,17 +834,17 @@ def submit_prompt():
             data = request.json
             if not data:
                 return jsonify({'error': 'Request body is required'}), 400
-            employee_name = data.get('employeeName', '').strip() if data else ''
-            prompt = data.get('prompt', '').strip() if data else ''
-            search_sharepoint = data.get('searchSharePoint', False)
-            document_type = data.get('documentType', '').strip() if data else ''
+            employee_name = (data.get('employeeName') or '').strip()
+            prompt = (data.get('prompt') or '').strip()
+            search_sharepoint = data.get('searchSharePoint', False) if data else False
+            document_type = (data.get('documentType') or '').strip()
             files = []
         else:
             # FormData request (may have files)
-            employee_name = request.form.get('employeeName', '').strip()
-            prompt = request.form.get('prompt', '').strip()
+            employee_name = (request.form.get('employeeName') or '').strip()
+            prompt = (request.form.get('prompt') or '').strip()
             search_sharepoint = request.form.get('searchSharePoint', 'false').lower() == 'true'
-            document_type = request.form.get('documentType', '').strip()
+            document_type = (request.form.get('documentType') or '').strip()
             files = request.files.getlist('files')
         
         print(f"Request data received: {bool(employee_name and prompt)}")
@@ -1204,7 +1204,7 @@ def get_employee_conversations(user_id):
             return jsonify({'error': 'User not found'}), 404
         
         # Log admin data access
-        admin_email = request.args.get('email', '').strip().lower()
+        admin_email = (request.args.get('email') or '').strip().lower()
         log_audit_event(
             action_type='admin_data_access',
             action_category='admin',
@@ -1271,8 +1271,8 @@ def login_user():
         if not data:
             return jsonify({'error': 'Request body is required'}), 400
         
-        email = data.get('email', '').strip().lower()
-        name = data.get('name', '').strip()
+        email = (data.get('email') or '').strip().lower()
+        name = (data.get('name') or '').strip()
         
         # Input validation and sanitization
         if not email:
@@ -1355,7 +1355,7 @@ def update_user_name(user_id):
         if not data:
             return jsonify({'error': 'Request body is required'}), 400
         
-        new_name = data.get('name', '').strip()
+        new_name = (data.get('name') or '').strip()
         
         if not new_name:
             return jsonify({'error': 'Name is required'}), 400

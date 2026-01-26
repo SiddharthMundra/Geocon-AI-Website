@@ -7,6 +7,9 @@ const STORAGE_KEY_CURRENT_USER = 'geocon_ai_current_user';
 const STORAGE_KEY_SESSION_TOKEN = 'geocon_ai_session_token';
 const STORAGE_KEY_SUBMISSIONS = 'geocon_ai_submissions';
 
+// Global flag to prevent checkAuth from interfering with login
+let isLoggingIn = false;
+
 // Password no longer required - email-only login
 
 // State
@@ -20,7 +23,13 @@ let isSendingMessage = false; // Prevent duplicate message submissions
 document.addEventListener('DOMContentLoaded', () => {
     // Set up login form listener immediately (before auth check)
     setupLoginListeners();
-    checkAuth();
+    // Only check auth if not already logged in (prevent unnecessary checks)
+    // Delay checkAuth slightly to ensure DOM is ready
+    setTimeout(() => {
+        if (!isLoggingIn) {
+            checkAuth();
+        }
+    }, 50);
     checkServerConnection();
 });
 
@@ -61,6 +70,12 @@ function setupLoginListeners() {
 
 // Check authentication
 async function checkAuth() {
+    // Don't check auth if we're in the middle of logging in
+    if (isLoggingIn) {
+        console.log('Login in progress, skipping checkAuth');
+        return;
+    }
+    
     // Don't check auth if app is already shown (prevent race condition)
     const appContainer = document.querySelector('.app-container');
     if (appContainer && !appContainer.classList.contains('hidden')) {
@@ -183,15 +198,28 @@ function saveUsers(users) {
 
 // Show login modal
 function showLogin() {
+    // Don't show login if we're in the middle of logging in
+    if (isLoggingIn) {
+        console.log('Login in progress, not showing login modal');
+        return;
+    }
+    
     console.log('showLogin() called');
     const loginModal = document.getElementById('login-modal');
     const nameModal = document.getElementById('name-modal');
     const appContainer = document.querySelector('.app-container');
     
-    if (loginModal) loginModal.classList.remove('hidden');
-    if (nameModal) nameModal.classList.add('hidden');
+    if (loginModal) {
+        loginModal.classList.remove('hidden');
+        loginModal.style.display = 'flex';
+    }
+    if (nameModal) {
+        nameModal.classList.add('hidden');
+        nameModal.style.display = 'none';
+    }
     if (appContainer) {
         appContainer.classList.add('hidden');
+        appContainer.style.display = 'none';
         appContainer.classList.remove('initialized');
     }
     console.log('Login modal shown, app hidden');
@@ -216,14 +244,26 @@ function showNameSetup() {
 // Show app (updated version with better error handling)
 function showApp() {
     console.log('showApp() called');
+    
+    // Set flag to prevent checkAuth from interfering
+    isLoggingIn = false;
+    
     const loginModal = document.getElementById('login-modal');
     const nameModal = document.getElementById('name-modal');
     const appContainer = document.querySelector('.app-container');
     
-    if (loginModal) loginModal.classList.add('hidden');
-    if (nameModal) nameModal.classList.add('hidden');
+    if (loginModal) {
+        loginModal.classList.add('hidden');
+        // Also set display: none to ensure it's completely hidden
+        loginModal.style.display = 'none';
+    }
+    if (nameModal) {
+        nameModal.classList.add('hidden');
+        nameModal.style.display = 'none';
+    }
     if (appContainer) {
         appContainer.classList.remove('hidden');
+        appContainer.style.display = 'flex';
         // Initialize app only if not already initialized
         if (!appContainer.classList.contains('initialized')) {
             appContainer.classList.add('initialized');
@@ -240,7 +280,10 @@ async function initializeApp() {
     // Ensure we have a current user
     if (!currentUser) {
         console.error('No current user, redirecting to login');
-        showLogin();
+        // Don't show login if we're in the middle of logging in
+        if (!isLoggingIn) {
+            showLogin();
+        }
         return;
     }
     
@@ -263,8 +306,11 @@ async function initializeApp() {
     updateGreeting();
     
     // Load conversations (async)
+    console.log('Loading conversations...');
     await loadConversations();
+    console.log('Conversations loaded, rendering chat history. Count:', conversations.length);
     renderChatHistory();
+    console.log('Chat history rendered');
     
     // Set up event listeners
     setupEventListeners();
@@ -421,6 +467,9 @@ async function handleLogin(e) {
     e.preventDefault();
     console.log('Login form submitted');
     
+    // Set flag to prevent checkAuth from interfering
+    isLoggingIn = true;
+    
     const email = document.getElementById('login-email').value.trim().toLowerCase();
     const errorDiv = document.getElementById('login-error');
     
@@ -431,6 +480,7 @@ async function handleLogin(e) {
         errorDiv.textContent = 'Email must be a @geoconinc.com address';
         errorDiv.classList.remove('hidden');
         console.log('Email validation failed');
+        isLoggingIn = false;
         return;
     }
     
@@ -487,6 +537,8 @@ async function handleLogin(e) {
             // Show app immediately - use setTimeout to prevent race condition with checkAuth
             setTimeout(() => {
                 showApp();
+                // Reset flag after showing app
+                isLoggingIn = false;
             }, 100);
         } else {
             // First time login - need to set name
@@ -499,12 +551,16 @@ async function handleLogin(e) {
             // Show name setup
             setTimeout(() => {
                 showNameSetup();
+                // Reset flag after showing name setup
+                isLoggingIn = false;
             }, 100);
         }
     } catch (error) {
         console.error('Login error:', error);
         errorDiv.textContent = error.message || 'Login failed. Please try again.';
         errorDiv.classList.remove('hidden');
+        // Reset flag on error
+        isLoggingIn = false;
     }
 }
 
@@ -825,7 +881,7 @@ async function sendMessage() {
             messages: [],
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
-            employeeName: currentUser.name,
+            employeeName: currentUser?.name || '',
             employeeEmail: currentUser.email
         };
         conversations.unshift(newChat);
@@ -913,7 +969,7 @@ async function sendMessage() {
         let requestOptions;
         if (selectedFiles.length > 0) {
             const formData = new FormData();
-            formData.append('employeeName', currentUser.name);
+            formData.append('employeeName', currentUser?.name || '');
             formData.append('prompt', prompt);
             formData.append('searchSharePoint', searchSharePoint);
             if (documentType) {
@@ -935,7 +991,7 @@ async function sendMessage() {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    employeeName: currentUser.name,
+                    employeeName: currentUser?.name || '',
                     prompt: prompt,
                     searchSharePoint: searchSharePoint,
                     documentType: documentType || null
@@ -1230,13 +1286,21 @@ function escapeHtml(text) {
 
 // Render chat history
 function renderChatHistory() {
+    console.log('renderChatHistory() called, conversations count:', conversations.length);
     const historyContainer = document.getElementById('chat-history');
+    if (!historyContainer) {
+        console.error('Chat history container not found!');
+        return;
+    }
     historyContainer.innerHTML = '';
     
     if (conversations.length === 0) {
         historyContainer.innerHTML = '<div style="padding: 12px; color: var(--sidebar-text); opacity: 0.7; font-size: 13px;">No conversations yet</div>';
+        console.log('No conversations to render');
         return;
     }
+    
+    console.log('Rendering', conversations.length, 'conversations');
     
     conversations.forEach(chat => {
         const item = document.createElement('div');
@@ -1317,44 +1381,79 @@ function removeFile(index) {
 
 // Load conversations from both database and localStorage
 async function loadConversations() {
+    console.log('loadConversations() called for user:', currentUser?.email, 'ID:', currentUser?.id);
+    
     // First try to load from database
     if (currentUser && currentUser.id) {
         try {
+            console.log(`Fetching conversations from: ${API_BASE_URL}/users/${currentUser.id}/conversations`);
             const response = await fetch(`${API_BASE_URL}/users/${currentUser.id}/conversations`);
+            console.log('Response status:', response.status, response.statusText);
+            
             if (response.ok) {
                 const dbConversations = await response.json();
-                if (dbConversations && dbConversations.length > 0) {
+                console.log('Loaded conversations from database:', dbConversations?.length || 0, 'Type:', typeof dbConversations, 'Is Array:', Array.isArray(dbConversations));
+                
+                // Handle both empty arrays and arrays with data
+                if (dbConversations && Array.isArray(dbConversations)) {
+                    if (dbConversations.length > 0) {
                     // Convert database format to local format
                     conversations = dbConversations.map(conv => ({
                         id: conv.id,
-                        title: conv.title,
+                        title: conv.title || 'Untitled Chat',
                         messages: conv.messages || [],
                         createdAt: conv.created_at,
                         updatedAt: conv.updated_at,
-                        employeeName: conv.employeeName || currentUser.name,
-                        employeeEmail: conv.employeeEmail || currentUser.email
+                        employeeName: conv.employeeName || currentUser?.name || '',
+                        employeeEmail: conv.employeeEmail || currentUser?.email || ''
                     }));
                     // Sort by updatedAt (newest first)
-                    conversations.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-                    // Save to localStorage for offline access
-                    saveConversations();
-                    return;
+                    conversations.sort((a, b) => {
+                        const dateA = new Date(a.updatedAt || a.createdAt || 0);
+                        const dateB = new Date(b.updatedAt || b.createdAt || 0);
+                        return dateB - dateA;
+                    });
+                        console.log('Processed conversations:', conversations.length);
+                        // Save to localStorage for offline access
+                        saveConversations();
+                        return;
+                    } else {
+                        console.log('Database returned empty array - no conversations found');
+                        conversations = [];
+                        // Still save empty array to localStorage
+                        saveConversations();
+                        return;
+                    }
+                } else {
+                    console.warn('Database response is not an array:', dbConversations);
                 }
+            } else {
+                const errorText = await response.text();
+                console.error('Failed to load conversations from database:', response.status, errorText);
             }
         } catch (error) {
-            console.log('Could not load from database, using localStorage:', error);
+            console.error('Error loading from database:', error);
+            console.log('Falling back to localStorage');
         }
+    } else {
+        console.warn('No currentUser or user ID, cannot load from database');
     }
     
     // Fallback to localStorage
     const users = getUsers();
-    const userData = users[currentUser.email];
+    const userData = users[currentUser?.email];
     if (userData && userData.conversations) {
         conversations = userData.conversations;
         // Sort by updatedAt (newest first)
-        conversations.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+        conversations.sort((a, b) => {
+            const dateA = new Date(a.updatedAt || a.createdAt || 0);
+            const dateB = new Date(b.updatedAt || b.createdAt || 0);
+            return dateB - dateA;
+        });
+        console.log('Loaded conversations from localStorage:', conversations.length);
     } else {
         conversations = [];
+        console.log('No conversations found in localStorage');
     }
 }
 
@@ -1451,7 +1550,7 @@ function saveToAdminSubmissions(chat, latestResponse) {
             if (aiMsg && aiMsg.role === 'assistant') {
                 submissions.push({
                     id: chat.id + '-' + index,
-                    employeeName: chat.employeeName,
+                    employeeName: chat.employeeName || currentUser?.name || '',
                     employeeEmail: chat.employeeEmail,
                     prompt: msg.content,
                     chatgptResponse: aiMsg.content,
