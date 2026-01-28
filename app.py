@@ -112,6 +112,9 @@ SHAREPOINT_TENANT = os.getenv('SHAREPOINT_TENANT', '')  # e.g., 'geoconmail.onmi
 SHAREPOINT_CLIENT_ID = os.getenv('SHAREPOINT_CLIENT_ID', '')  # Azure AD App Client ID
 SHAREPOINT_CLIENT_SECRET = os.getenv('SHAREPOINT_CLIENT_SECRET', '')  # Azure AD App Client Secret
 SHAREPOINT_USE_GRAPH_API = os.getenv('SHAREPOINT_USE_GRAPH_API', 'true').lower() == 'true'
+# Region is required for Graph search with application permissions.
+# Common values: 'NAM' (North America), 'EUR' (Europe), 'APAC' (Asia Pacific)
+SHAREPOINT_SEARCH_REGION = os.getenv('SHAREPOINT_SEARCH_REGION', 'NAM')
 # IMPORTANT: All operations are READ-ONLY - no modifications, deletions, or writes to SharePoint
 # Only uses: GET requests, Sites.Read.All, Files.Read.All, Sites.Search.All permissions
 
@@ -372,6 +375,7 @@ def search_sharepoint_documents(query, max_results=5):
         print("  [SharePoint] === SharePoint search starting ===")
         print(f"  [SharePoint] Site URL: {SHAREPOINT_SITE_URL}")
         print(f"  [SharePoint] Tenant: {SHAREPOINT_TENANT}")
+        print(f"  [SharePoint] Region: {SHAREPOINT_SEARCH_REGION}")
         print(f"  [SharePoint] Query (first 200 chars): {query[:200]}")
         
         # Get access token
@@ -396,6 +400,8 @@ def search_sharepoint_documents(query, max_results=5):
                     "query": {
                         "queryString": query
                     },
+                    # Region is required when using application permissions with Graph search
+                    "region": SHAREPOINT_SEARCH_REGION,
                     "from": 0,
                     "size": max_results
                 }]
