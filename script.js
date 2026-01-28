@@ -7,6 +7,42 @@ const STORAGE_KEY_CURRENT_USER = 'geocon_ai_current_user';
 const STORAGE_KEY_SESSION_TOKEN = 'geocon_ai_session_token';
 const STORAGE_KEY_SUBMISSIONS = 'geocon_ai_submissions';
 
+// Toast notifications
+function showToast(message, type = 'info', duration = 3500) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    
+    const msg = document.createElement('div');
+    msg.className = 'toast-message';
+    msg.textContent = message;
+    
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'toast-close';
+    closeBtn.innerHTML = '&times;';
+    closeBtn.addEventListener('click', () => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 200);
+    });
+    
+    toast.appendChild(msg);
+    toast.appendChild(closeBtn);
+    container.appendChild(toast);
+    
+    // Trigger animation
+    requestAnimationFrame(() => {
+        toast.classList.add('show');
+    });
+    
+    // Auto-remove
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 200);
+    }, duration);
+}
+
 // Global flag to prevent checkAuth from interfering with login
 let isLoggingIn = false;
 
@@ -412,47 +448,27 @@ function setupEventListeners() {
         });
     }
     
-    // Document type selector
+    // Document type selector (just changes mode/placeholder; does NOT autofill content)
     const documentTypeSelect = document.getElementById('document-type');
     if (documentTypeSelect) {
-        documentTypeSelect.addEventListener('change', async (e) => {
+        documentTypeSelect.addEventListener('change', (e) => {
             const wrapper = document.querySelector('.document-generator-wrapper');
             const promptInput = document.getElementById('prompt-input');
             const selectedType = e.target.value;
 
             if (selectedType) {
-                wrapper.classList.add('active');
+                if (wrapper) wrapper.classList.add('active');
 
-                // Update placeholder to indicate document mode
+                // Update placeholder to indicate document mode, but do not change existing text
                 if (promptInput) {
                     const typeName = e.target.options[e.target.selectedIndex].text.trim();
-                    promptInput.placeholder = `Provide information for ${typeName}... (Shift+Enter for new line, Enter to send)`;
-                }
-
-                // Prepopulate the textarea with the backend template for this document type
-                try {
-                    const resp = await fetch(`${API_BASE_URL}/document-format/${selectedType}`);
-                    if (resp.ok) {
-                        const data = await resp.json();
-                        if (promptInput && data.template) {
-                            promptInput.value = data.template + '\n\n';
-                            // Trigger auto-resize
-                            promptInput.style.height = 'auto';
-                            promptInput.style.height = Math.min(promptInput.scrollHeight, 200) + 'px';
-                        }
-                    } else {
-                        console.warn('Could not load document template:', await resp.text());
-                    }
-                } catch (err) {
-                    console.error('Error loading document template:', err);
+                    promptInput.placeholder = `Provide content for ${typeName} (the AI will format it)...`;
                 }
             } else {
-                wrapper.classList.remove('active');
-                // Reset placeholder and clear any prefilled template
+                if (wrapper) wrapper.classList.remove('active');
+                // Reset placeholder only
                 if (promptInput) {
                     promptInput.placeholder = 'Type your message... (Shift+Enter for new line, Enter to send)';
-                    promptInput.value = '';
-                    promptInput.style.height = 'auto';
                 }
             }
         });
@@ -754,8 +770,8 @@ async function handleSettingsSave(e) {
         // Hide settings modal
         hideSettings();
         
-        // Show success message
-        alert('Display name updated successfully!');
+        // Show success toast
+        showToast('Display name updated successfully.', 'success');
     } catch (error) {
         console.error('Error updating name:', error);
         errorDiv.textContent = error.message || 'Failed to update name. Please try again.';
@@ -765,31 +781,34 @@ async function handleSettingsSave(e) {
 
 // Handle logout
 function handleLogout() {
-    if (confirm('Are you sure you want to logout? Your chat history will be saved.')) {
-        // Save current chat ID
-        if (currentChatId) {
-            localStorage.setItem(`current_chat_${currentUser.email}`, currentChatId);
-        }
-        
-        // Clear session token
-        localStorage.removeItem(STORAGE_KEY_SESSION_TOKEN);
-        
-        // Clear current user
-        currentUser = null;
-        localStorage.removeItem(STORAGE_KEY_CURRENT_USER);
-        
-        // Reset state
-        currentChatId = null;
-        conversations = [];
-        selectedFiles = [];
-        
-        // Show login
-        showLogin();
-        
-        // Clear forms
-        document.getElementById('login-form').reset();
-        document.getElementById('name-form').reset();
+    // Save current chat ID
+    if (currentChatId && currentUser && currentUser.email) {
+        localStorage.setItem(`current_chat_${currentUser.email}`, currentChatId);
     }
+    
+    // Clear session token
+    localStorage.removeItem(STORAGE_KEY_SESSION_TOKEN);
+    
+    // Clear current user
+    currentUser = null;
+    localStorage.removeItem(STORAGE_KEY_CURRENT_USER);
+    
+    // Reset state
+    currentChatId = null;
+    conversations = [];
+    selectedFiles = [];
+    
+    // Show login
+    showLogin();
+    
+    // Clear forms if they exist
+    const loginForm = document.getElementById('login-form');
+    if (loginForm) loginForm.reset();
+    const nameForm = document.getElementById('name-form');
+    if (nameForm) nameForm.reset();
+    
+    // Show friendly toast
+    showToast('You have been logged out. Your chat history is saved.', 'info');
 }
 
 // Check server connection
@@ -838,13 +857,28 @@ async function loadChat(chatId) {
                 const dbConversations = await response.json();
                 const dbChat = dbConversations.find(c => c.id === chatId);
                 if (dbChat && dbChat.messages && dbChat.messages.length > 0) {
-                    // Use database messages (they have proper timestamps)
-                    chat.messages = dbChat.messages.map(msg => ({
+                    // Merge existing local messages (if any) with database messages,
+                    // then deduplicate so each turn appears once.
+                    const dbMessages = dbChat.messages.map(msg => ({
                         role: msg.role,
                         content: msg.content,
                         timestamp: msg.timestamp || msg.created_at,
                         metadata: msg.metadata || {}
                     }));
+
+                    const combined = [...(chat.messages || []), ...dbMessages];
+
+                    // Deduplicate by role+content+timestamp (or created_at fallback)
+                    const seen = new Set();
+                    const merged = [];
+                    for (const m of combined) {
+                        const key = `${m.role}::${m.content}::${m.timestamp || m.created_at || ''}`;
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        merged.push(m);
+                    }
+
+                    chat.messages = merged;
                 }
             }
         } catch (error) {
@@ -1490,19 +1524,6 @@ async function saveConversations() {
     users[currentUser.email].name = currentUser.name;
     users[currentUser.email].email = currentUser.email;
     saveUsers(users);
-    
-    // Also save to database if user has ID
-    if (currentUser && currentUser.id) {
-        try {
-            // Save each conversation to database
-            for (const chat of conversations) {
-                await saveConversationToDatabase(chat);
-            }
-        } catch (error) {
-            console.error('Error saving conversations to database:', error);
-            // Continue even if database save fails
-        }
-    }
 }
 
 // Save a single conversation to database

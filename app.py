@@ -450,12 +450,21 @@ def search_sharepoint_documents(query, max_results=5):
                                         pass
                             
                             # Restrict results to GeoconCentral site only
-                            if web_url and not web_url.lower().startswith(SHAREPOINT_SITE_URL.lower()):
-                                print(f"  [SharePoint] Skipping hit outside GeoconCentral: {web_url}")
-                                continue
+                            if web_url:
+                                web_url_lower = web_url.lower()
+                                site_prefix = SHAREPOINT_SITE_URL.lower()
+                                
+                                if not web_url_lower.startswith(site_prefix):
+                                    print(f"  [SharePoint] Skipping hit outside GeoconCentral: {web_url}")
+                                    continue
+                                
+                                # Further restrict to Shared Documents library
+                                if '/shared documents/' not in web_url_lower and '/shared%20documents/' not in web_url_lower:
+                                    print(f"  [SharePoint] Skipping hit outside Shared Documents library: {web_url}")
+                                    continue
                             
                             # Log each kept hit's basic info
-                            print(f"  [SharePoint] Hit (GeoconCentral): title='{title}', url='{web_url}'")
+                            print(f"  [SharePoint] Hit (GeoconCentral Shared Documents): title='{title}', url='{web_url}'")
                             
                             search_results.append({
                                 'title': title,
@@ -990,22 +999,20 @@ def submit_prompt():
             else:
                 print("No relevant SharePoint documents found")
         
-        # Get document format if document type is specified
-        document_format = None
+        # If a document type is selected, lightly instruct the model to format the user's content,
+        # but do NOT inject any predefined template or overwrite what the user typed.
         if document_type:
-            document_format = get_document_format(document_type)
-            if document_format:
-                print(f"Document type: {document_type}")
-                # Enhance prompt with document format instructions
-                prompt = f"""Generate a {document_type} based on the following information and requirements.
+            print(f"Document type requested (no autofill template): {document_type}")
+            prompt = f"""The user is providing content that should become a professional {document_type}.
 
-Document Format Requirements:
-{document_format}
+Please:
+- Keep all technical details the user provides
+- Organize and format it as a clear, well-structured {document_type}
+- Add headings, spacing, and professional tone, but do not invent new business facts.
 
-User Information and Requirements:
+User-provided content:
 {prompt}
-
-Please generate a complete, professional {document_type} following the format requirements above. Ensure all sections are properly formatted and the document is ready for use."""
+"""
         
         # Call Azure OpenAI API
         print("Calling Azure OpenAI API...")
