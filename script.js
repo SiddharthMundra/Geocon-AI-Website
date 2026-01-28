@@ -936,14 +936,16 @@ async function sendMessage() {
     // Get current chat
     const chat = conversations.find(c => c.id === currentChatId);
     
-    // Add user message to UI
+    // Build metadata for this user message
     const userMetadata = {
         filesCount: selectedFiles.length,
         fileNames: selectedFiles.map(f => f.name)
     };
+    
+    // Add user message to UI immediately
     appendMessage('user', prompt, userMetadata);
     
-    // Add user message to chat
+    // Add user message to chat (local state)
     chat.messages.push({
         role: 'user',
         content: prompt,
@@ -951,29 +953,7 @@ async function sendMessage() {
         metadata: userMetadata
     });
     
-    // Save user message to database immediately
-    if (currentUser && currentUser.id && currentChatId) {
-        try {
-            await fetch(`${API_BASE_URL}/conversations/${currentChatId}/messages`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    conversation_id: currentChatId,
-                    role: 'user',
-                    content: prompt,
-                    metadata: userMetadata
-                })
-            });
-        } catch (error) {
-            console.error('Error saving user message to database:', error);
-        }
-    }
-    
-    // Clear input
-    promptInput.value = '';
-    promptInput.style.height = 'auto';
-    
-    // Show loading
+    // Show loading state *before* any network calls so UI responds instantly
     sendBtn.disabled = true;
     sendIcon.classList.add('hidden');
     sendLoader.classList.remove('hidden');
@@ -981,6 +961,26 @@ async function sendMessage() {
     // Add loading message with dots animation
     const loadingId = 'loading-' + Date.now();
     appendLoadingMessage(loadingId);
+    
+    // Fire-and-forget save of user message to database (don't block UI)
+    if (currentUser && currentUser.id && currentChatId) {
+        fetch(`${API_BASE_URL}/conversations/${currentChatId}/messages`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                conversation_id: currentChatId,
+                role: 'user',
+                content: prompt,
+                metadata: userMetadata
+            })
+        }).catch(error => {
+            console.error('Error saving user message to database:', error);
+        });
+    }
+    
+    // Clear input after we've updated the UI
+    promptInput.value = '';
+    promptInput.style.height = 'auto';
     
     try {
         // Get document type if selected
