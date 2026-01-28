@@ -730,6 +730,25 @@ REPORT FORMAT:
     }
     return formats.get(document_type.lower())
 
+
+@app.route('/api/document-format/<document_type>', methods=['GET'])
+def get_document_format_api(document_type):
+    """Return the template/format for a given document type so the UI can prepopulate the prompt."""
+    try:
+        template = get_document_format(document_type)
+        if not template:
+            return jsonify({'error': 'Unknown document type'}), 404
+        
+        return jsonify({
+            'type': document_type,
+            'template': template
+        })
+    except Exception as e:
+        print(f"Error getting document format for {document_type}: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': 'Internal server error'}), 500
+
 def call_azure_openai(prompt, sharepoint_context=None, file_contents=None):
     """Call Azure OpenAI API to get response with timeout. Returns (response_text, metadata_dict)"""
     if not client:

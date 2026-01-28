@@ -415,22 +415,44 @@ function setupEventListeners() {
     // Document type selector
     const documentTypeSelect = document.getElementById('document-type');
     if (documentTypeSelect) {
-        documentTypeSelect.addEventListener('change', (e) => {
+        documentTypeSelect.addEventListener('change', async (e) => {
             const wrapper = document.querySelector('.document-generator-wrapper');
-            if (e.target.value) {
+            const promptInput = document.getElementById('prompt-input');
+            const selectedType = e.target.value;
+
+            if (selectedType) {
                 wrapper.classList.add('active');
+
                 // Update placeholder to indicate document mode
-                const promptInput = document.getElementById('prompt-input');
                 if (promptInput) {
-                    const typeName = e.target.options[e.target.selectedIndex].text.replace(/[📄✉️📊]/g, '').trim();
+                    const typeName = e.target.options[e.target.selectedIndex].text.trim();
                     promptInput.placeholder = `Provide information for ${typeName}... (Shift+Enter for new line, Enter to send)`;
+                }
+
+                // Prepopulate the textarea with the backend template for this document type
+                try {
+                    const resp = await fetch(`${API_BASE_URL}/document-format/${selectedType}`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        if (promptInput && data.template) {
+                            promptInput.value = data.template + '\n\n';
+                            // Trigger auto-resize
+                            promptInput.style.height = 'auto';
+                            promptInput.style.height = Math.min(promptInput.scrollHeight, 200) + 'px';
+                        }
+                    } else {
+                        console.warn('Could not load document template:', await resp.text());
+                    }
+                } catch (err) {
+                    console.error('Error loading document template:', err);
                 }
             } else {
                 wrapper.classList.remove('active');
-                // Reset placeholder
-                const promptInput = document.getElementById('prompt-input');
+                // Reset placeholder and clear any prefilled template
                 if (promptInput) {
                     promptInput.placeholder = 'Type your message... (Shift+Enter for new line, Enter to send)';
+                    promptInput.value = '';
+                    promptInput.style.height = 'auto';
                 }
             }
         });
