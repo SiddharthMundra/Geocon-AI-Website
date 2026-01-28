@@ -334,10 +334,12 @@ def save_submission(submission):
 def get_sharepoint_access_token():
     """Get access token for SharePoint using client credentials"""
     if not SHAREPOINT_CLIENT_ID or not SHAREPOINT_CLIENT_SECRET or not SHAREPOINT_TENANT:
+        print("  WARNING: Missing SharePoint client ID / secret / tenant. Cannot get access token.")
         return None
     
     try:
         token_url = f"https://login.microsoftonline.com/{SHAREPOINT_TENANT}/oauth2/v2.0/token"
+        print(f"  [SharePoint] Requesting access token from tenant: {SHAREPOINT_TENANT}")
         token_data = {
             'client_id': SHAREPOINT_CLIENT_ID,
             'client_secret': SHAREPOINT_CLIENT_SECRET,
@@ -347,12 +349,13 @@ def get_sharepoint_access_token():
         
         response = requests.post(token_url, data=token_data)
         if response.status_code == 200:
+            print("  [SharePoint] Successfully obtained access token.")
             return response.json().get('access_token')
         else:
-            print(f"  ERROR getting SharePoint token: {response.status_code} - {response.text}")
+            print(f"  [SharePoint] ERROR getting token: {response.status_code} - {response.text[:200]}")
             return None
     except Exception as e:
-        print(f"  ERROR getting SharePoint token: {str(e)}")
+        print(f"  [SharePoint] ERROR getting SharePoint token: {str(e)}")
         return None
 
 
@@ -362,16 +365,19 @@ def search_sharepoint_documents(query, max_results=5):
     This function ONLY reads from SharePoint - no modifications, deletions, or writes
     """
     if not SHAREPOINT_SITE_URL or not SHAREPOINT_CLIENT_ID:
-        print("  WARNING: SharePoint not configured. Skipping SharePoint search.")
+        print("  [SharePoint] WARNING: SHAREPOINT_SITE_URL or SHAREPOINT_CLIENT_ID not configured. Skipping SharePoint search.")
         return []
     
     try:
-        print(f"  Searching SharePoint (READ-ONLY) for: {query[:50]}...")
+        print("  [SharePoint] === SharePoint search starting ===")
+        print(f"  [SharePoint] Site URL: {SHAREPOINT_SITE_URL}")
+        print(f"  [SharePoint] Tenant: {SHAREPOINT_TENANT}")
+        print(f"  [SharePoint] Query (first 200 chars): {query[:200]}")
         
         # Get access token
         access_token = get_sharepoint_access_token()
         if not access_token:
-            print("  WARNING: Could not get SharePoint access token. Skipping search.")
+            print("  [SharePoint] WARNING: Could not get SharePoint access token. Skipping search.")
             return []
         
         # Use Microsoft Graph API to search SharePoint - READ-ONLY operation
@@ -396,10 +402,19 @@ def search_sharepoint_documents(query, max_results=5):
             }
             
             # POST request for search (still read-only - just searching, not modifying)
+            print(f"  [SharePoint] POST {search_url}")
             response = requests.post(search_url, headers=headers, json=search_body)
+            print(f"  [SharePoint] Search response status: {response.status_code}")
             
             if response.status_code == 200:
                 results = response.json()
+                # Log a small preview of the raw result for debugging (truncated)
+                try:
+                    preview = json.dumps(results)[:500]
+                    print(f"  [SharePoint] Raw search result preview (truncated): {preview}")
+                except Exception:
+                    pass
+
                 search_results = []
                 
                 # Extract relevant information from search results
@@ -427,6 +442,9 @@ def search_sharepoint_documents(query, max_results=5):
                                             content = content_response.text[:2000] if content_response.headers.get('content-type', '').startswith('text/') else snippet
                                     except:
                                         pass
+
+                            # Log each hit's basic info
+                            print(f"  [SharePoint] Hit: title='{title}', url='{web_url}'")
                             
                             search_results.append({
                                 'title': title,
@@ -435,18 +453,23 @@ def search_sharepoint_documents(query, max_results=5):
                                 'snippet': snippet
                             })
                 
-                print(f"  Found {len(search_results)} SharePoint results")
+                print(f"  [SharePoint] Found {len(search_results)} SharePoint result(s).")
+                if not search_results:
+                    print("  [SharePoint] NOTE: No documents matched this query. Any 'Source: Geocon SharePoint ...' text in the AI answer is from the model's general knowledge, not from an actual file.")
+                print("  [SharePoint] === SharePoint search finished ===")
                 return search_results
             else:
-                print(f"  ERROR searching SharePoint: {response.status_code} - {response.text[:200]}")
+                print(f"  [SharePoint] ERROR searching SharePoint: {response.status_code} - {response.text[:500]}")
+                print("  [SharePoint] === SharePoint search finished with ERROR ===")
                 return []
         else:
             # Alternative: Use SharePoint REST API directly
-            print("  SharePoint REST API mode not yet implemented")
+            print("  [SharePoint] SharePoint REST API mode not yet implemented (SHAREPOINT_USE_GRAPH_API is False).")
+            print("  [SharePoint] === SharePoint search finished (no Graph API) ===")
             return []
             
     except Exception as e:
-        print(f"  ERROR searching SharePoint: {str(e)}")
+        print(f"  [SharePoint] ERROR searching SharePoint: {str(e)}")
         import traceback
         traceback.print_exc()
         return []
