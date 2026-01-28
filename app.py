@@ -65,7 +65,7 @@ print(f"Database URL configured: ...@{db_url_preview}")
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# PostgreSQL connection settings for production (20+ concurrent users)
+# PostgreSQL connection settings for production (200+ concurrent users)
 connect_args = {
     'connect_timeout': 10,  # Connection timeout in seconds
     'application_name': 'geocon_ai_app',
@@ -74,8 +74,8 @@ connect_args = {
 engine_options = {
     'pool_pre_ping': True,  # Verify connections before using
     'pool_recycle': 300,    # Recycle connections after 5 minutes
-    'pool_size': 20,        # Number of connections to maintain
-    'max_overflow': 10,     # Additional connections beyond pool_size
+    'pool_size': 80,        # Number of connections to maintain (increased for 200 users)
+    'max_overflow': 40,     # Additional connections beyond pool_size (total: 120 max)
     'pool_timeout': 30,     # Timeout for getting connection from pool
     'connect_args': connect_args
 }
@@ -1428,9 +1428,13 @@ def get_user_conversations(user_id):
             return jsonify({'error': 'User not found'}), 404
         
         # Only get non-deleted conversations (handle missing column gracefully)
+        # Use eager loading to prevent N+1 queries (load messages in one query)
+        from sqlalchemy.orm import joinedload
         try:
-            # Try to query with is_deleted filter
-            conversations = Conversation.query.filter_by(
+            # Try to query with is_deleted filter and eager load messages
+            conversations = Conversation.query.options(
+                joinedload(Conversation.messages)
+            ).filter_by(
                 user_id=user_id, 
                 is_deleted=False
             ).order_by(Conversation.updated_at.desc()).all()
@@ -1439,7 +1443,9 @@ def get_user_conversations(user_id):
             print(f"Warning: is_deleted column not found, getting all conversations: {e}")
             db.session.rollback()  # Rollback the failed transaction
             try:
-                conversations = Conversation.query.filter_by(
+                conversations = Conversation.query.options(
+                    joinedload(Conversation.messages)
+                ).filter_by(
                     user_id=user_id
                 ).order_by(Conversation.updated_at.desc()).all()
             except Exception as e2:
