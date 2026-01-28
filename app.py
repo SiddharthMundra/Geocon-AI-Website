@@ -448,9 +448,14 @@ def search_sharepoint_documents(query, max_results=5):
                                             content = content_response.text[:2000] if content_response.headers.get('content-type', '').startswith('text/') else snippet
                                     except:
                                         pass
-
-                            # Log each hit's basic info
-                            print(f"  [SharePoint] Hit: title='{title}', url='{web_url}'")
+                            
+                            # Restrict results to GeoconCentral site only
+                            if web_url and not web_url.lower().startswith(SHAREPOINT_SITE_URL.lower()):
+                                print(f"  [SharePoint] Skipping hit outside GeoconCentral: {web_url}")
+                                continue
+                            
+                            # Log each kept hit's basic info
+                            print(f"  [SharePoint] Hit (GeoconCentral): title='{title}', url='{web_url}'")
                             
                             search_results.append({
                                 'title': title,
